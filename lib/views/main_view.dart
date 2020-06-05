@@ -22,7 +22,7 @@ class MainView extends StatelessWidget {
             child: IconButton(
               icon: ThemeSwitcher.of(context).darkMode
               ? Icon(Icons.wb_sunny, color: Colors.black)
-              : Image.asset('assets/images/icons/moon.png', color: Colors.white, height: 20, width: 20)
+              : Image.asset('assets/images/moon.png', color: Colors.white, height: 20, width: 20)
             ),
             mini: true,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(12.0))),

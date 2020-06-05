@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:portfolio/widgets/darkmode/theme_widget.dart';
 import 'package:portfolio/widgets/nav_bar/navbar_main.dart';
 import 'package:portfolio/widgets/social_icons/socialicons.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:portfolio/widgets/on_hover/on_hover_mouse_changer.dart';
 
 class HomeView extends StatelessWidget {
   const HomeView({Key key}) : super(key: key);
@@ -18,7 +18,7 @@ class HomeView extends StatelessWidget {
     );
   }
 }
-
+ 
 
 class ContentHome extends StatelessWidget {
   const ContentHome({Key key}) : super(key: key);
@@ -34,7 +34,7 @@ class ContentHome extends StatelessWidget {
             children: <Widget>[
               CircleAvatar(
                 radius: 100,
-                backgroundImage: Image.asset('images/home/home.png').image,
+                backgroundImage: Image.asset('assets/images/home.png').image,
               ),
               SizedBox(height: 20),
               Text('Fredy Acuña', textScaleFactor: 4),
@@ -54,37 +54,42 @@ class ContentHome extends StatelessWidget {
                       Tooltip(
                         message: "Github",
                         child: InkWell(
+                          hoverColor: ThemeSwitcher.of(context).darkMode?Colors.black:Colors.white,
                           child: SocialIcon(icon: FontAwesomeIcons.github),
                           onTap: () => launch('https://github.com/fredhii'),
-                        ).showCursorOnHover.moveUpOnHover
+                        )
                       ),
                       Tooltip(
                         message: "Linkedin",
                         child: InkWell(
+                          hoverColor: ThemeSwitcher.of(context).darkMode?Colors.black:Colors.white,
                           child: SocialIcon(icon: FontAwesomeIcons.linkedinIn),
                           onTap: () => launch('https://www.linkedin.com/in/fredhii/'),
-                        ).showCursorOnHover.moveUpOnHover
+                        )
                       ),
                       Tooltip(
                         message: "E-Mail",
                         child: InkWell(
+                          hoverColor: ThemeSwitcher.of(context).darkMode?Colors.black:Colors.white,
                           child: SocialIcon(icon: Icons.mail_outline),
                           onTap: () => launch('mailto:fredhiixd@gmail.com?subject=Hire&body=text...'),
-                        ).showCursorOnHover.moveUpOnHover
+                        )
                       ),
                       Tooltip(
                         message: "Twitter",
                         child: InkWell(
+                          hoverColor: ThemeSwitcher.of(context).darkMode?Colors.black:Colors.white,
                           child: SocialIcon(icon: FontAwesomeIcons.twitter),
                           onTap: () => launch('https://twitter.com/Fredhii_'),
-                        ).showCursorOnHover.moveUpOnHover
+                        )
                       ),
                       Tooltip(
-                        message: "Linkedin",
+                        message: "Medium",
                         child: InkWell(
+                          hoverColor: ThemeSwitcher.of(context).darkMode?Colors.black:Colors.white,
                           child: SocialIcon(icon: FontAwesomeIcons.mediumM),
                           onTap: () => launch('https://medium.com/@fredhii'),
-                        ).showCursorOnHover.moveUpOnHover
+                        )
                       )
                     ],
                   )

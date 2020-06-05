@@ -10,7 +10,7 @@ class HireView extends StatelessWidget {
       children: <Widget>[
         NavBarMain(),
         SizedBox(height: 60),
-        Center(child: Text("Hire Me"))
+        Center(child: Text("under construction..."))
       ],
     );
   }

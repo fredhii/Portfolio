@@ -19,7 +19,7 @@ class NavBarDrawerHeader extends StatelessWidget {
                 fontSize: 18, fontWeight: FontWeight.w800),
           ),
           SizedBox(height: 10),
-          Image.asset('images/cat.png'),
+          Image.asset('assets/images/cat.png'),
         ],
       ),
     );

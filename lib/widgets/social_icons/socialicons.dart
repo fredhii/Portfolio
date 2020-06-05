@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:portfolio/widgets/on_hover/on_hover_mouse_changer.dart';
+
 
 
 class SocialIcon extends StatelessWidget {
@@ -13,7 +15,7 @@ class SocialIcon extends StatelessWidget {
       height: 50,
       margin: EdgeInsets.only(left: 20),
       child: Center(
-        child: Icon(icon)
+        child: Icon(icon).showCursorOnHover.moveUpOnHover
       ),
     );
   }
