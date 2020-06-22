@@ -39,9 +39,12 @@ class _FadeRoute extends PageRouteBuilder {
             Animation<double> secondaryAnimation,
             Widget child,
           ) =>
-              FadeTransition(
+
+            ScaleTransition(scale: animation, alignment: Alignment.center, child: child,),
+            /* SlideTransition(position: Tween<Offset>(begin: Offset(-1, 0), end: Offset.zero).animate(animation), child: child), */
+              /* FadeTransition(
             opacity: animation,
             child: child,
-          ),
+          ), */
         );
 } 
