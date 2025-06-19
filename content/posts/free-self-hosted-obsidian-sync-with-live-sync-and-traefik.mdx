@@ -1,0 +1,179 @@
+---
+title: 'Free, Self-Hosted Obsidian Sync with LiveSync and Traefik'
+summary: 'A detailed, step-by-step guide to setting up real-time, end-to-end encrypted, and self-hosted synchronization for your Obsidian notes using the LiveSync plugin, Docker, CouchDB, and Traefik.'
+image: '/images/posts/free-self-hosted-obsidian-sync-with-live-sync-and-traefik.webp'
+author: 'Fredy Acuna'
+publishedAt: '2025-06-19'
+---
+
+### Guide: Obsidian with Free, Self-Hosted, Instant Sync
+
+The [LiveSync plugin](https://github.com/vrtmrz/obsidian-livesync) for Obsidian is one of the best self-hosted services I've set up. It provides seamless, instant, and secure note synchronization across all devices. Since most tutorials skip essential details, I created this comprehensive guide using Docker, CouchDB, and Traefik.
+
+---
+
+### 🧭 Why This Guide?
+
+If you've ever bounced between tools like Notion, Microsoft Loop, or even Apple Notes, you probably know the frustration: great features, but limited control. Maybe you’ve tried Obsidian and loved its local-first approach — but hit a wall when it came to syncing your notes across devices *without paying* or *giving up control*.
+
+This guide is for people who want:
+
+- **A secure, private, and self-hosted way to sync Obsidian notes**
+- **Full compatibility with desktop and mobile apps**
+- **A solution that’s free, real-time, and encrypted**
+
+We’ll walk you through every step — no assumptions, no skipped details. By the end, you'll have a fully functional sync setup using Docker, CouchDB, Traefik, and the Obsidian LiveSync plugin.
+
+Let’s build your own personal sync server — no subscriptions, no black boxes.
+
+---
+
+### 🛠️ How It Works
+
+This setup includes:
+
+1. **Obsidian App** — Installed on each device (Windows/macOS/Linux/iOS/Android). Offline-friendly.
+2. **CouchDB** — A self-hosted database to store your notes (encrypted). We'll use Docker.
+3. **LiveSync Plugin** — Connects Obsidian to your CouchDB, syncing in real time.
+
+---
+
+### ✅ Prerequisites
+
+- A server with Docker and Docker Compose installed.
+- [Traefik v2](https://doc.traefik.io/traefik/) as your reverse proxy.
+- A domain (e.g., `your-domain.com`) and a subdomain pointing to your server (e.g., `obsidian.your-domain.com`).
+
+---
+
+### 📦 Step 1: Set Up CouchDB with Docker & Traefik (Your Setup May Vary)
+
+Depending on how your server is configured, this step may look slightly different for you.
+
+> **💡 Note:** This tutorial assumes you're using Docker with Traefik as a reverse proxy. If you're using another reverse proxy (like Nginx or Caddy), or deploying to a platform like CapRover or Dokku, adapt this step accordingly — the core idea is the same: expose CouchDB securely over HTTPS.
+
+---
+
+```yaml
+services:
+  couchdb-obsidian-livesync:
+    container_name: obsidian-livesync
+    image: couchdb:3.3.3
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Bogota
+      - COUCHDB_USER=obsidian_user
+      - COUCHDB_PASSWORD=YOUR_VERY_STRONG_PASSWORD
+    volumes:
+      - ./data:/opt/couchdb/data
+      - ./etc/local.d:/opt/couchdb/etc/local.d
+    networks:
+      - traefik-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.obsidian.rule=Host(`obsidian.your-domain.com`)"
+      - "traefik.http.routers.obsidian.entrypoints=https"
+      - "traefik.http.routers.obsidian.tls.certresolver=letsencrypt"
+      - "traefik.http.services.obsidian.loadbalancer.server.port=5984"
+
+networks:
+  traefik-net:
+    external: true
+```
+
+> **Note:** 🔐 Make sure to replace passwords and domain names.
+📂 Persist your volumes to avoid losing data on container restart.
+
+Then run:
+```bash
+docker-compose up -d
+```
+
+> If you're not using Traefik, here’s what to focus on:
+- Ensure port 5984 is accessible via HTTPS.
+- Secure CouchDB behind basic auth and a reverse proxy with TLS/SSL.
+- Make sure your domain or subdomain (like obsidian.your-domain.com) points to your server and has a valid SSL certificate.
+
+
+### 🌐 Step 2: Initial CouchDB Setup
+
+Navigate to:  
+`https://obsidian.your-domain.com/_utils/`
+
+1. Log in using your `COUCHDB_USER` and `COUCHDB_PASSWORD` defined in your `docker-compose.yml`.
+2. Click the `<->` icon in the top-left to expand the sidebar.
+3. Select **Setup** from the menu.
+4. Click **Configure a Single Node**.
+5. Confirm your credentials when prompted.
+6. Leave other settings at default and click **Configure Node**.
+
+---
+
+### 🧪 Step 3: Verify & Create Your Database
+
+#### ✅ Verify Installation
+
+1. Click **Verify** from the sidebar.
+2. Click **Verify Installation**.
+3. You should see a success banner and six green checkmarks.
+
+#### 🗃️ Create Database
+
+1. Go to **Databases** → Click **Create Database**.
+2. **Database name**: `obsidiandb` (or unique names like `obsidiandb_fredy`)
+3. **Partitioned**: Choose `Non-partitioned`.
+4. Click **Create**.
+
+---
+
+### ⚙️ Step 4: CouchDB Configuration for LiveSync
+
+Head to **Configuration** in the sidebar.
+
+Click **+ Add Option** and enter the following settings:
+
+| Section       | Name                     | Value                                                               |
+|---------------|--------------------------|---------------------------------------------------------------------|
+| `chttpd`      | `require_valid_user`     | `true`                                                              |
+| `chttpd_auth` | `require_valid_user`     | `true`                                                              |
+| `httpd`       | `WWW-Authenticate`       | `Basic realm="couchdb"`                                             |
+| `httpd`       | `enable_cors`            | `true`                                                              |
+| `chttpd`      | `enable_cors`            | `true`                                                              |
+| `chttpd`      | `max_http_request_size`  | `4294967296`                                                        |
+| `couchdb`     | `max_document_size`      | `50000000`                                                          |
+| `cors`        | `credentials`            | `true`                                                              |
+| `cors`        | `origins`                | `app://obsidian.md,capacitor://localhost,http://localhost`         |
+
+Click **Save Changes** after each addition.
+
+---
+
+### 🖥️ Step 5: Obsidian Desktop Setup
+
+1. [Download Obsidian](https://obsidian.md/) for your operating system.
+2. Open the app and click **Create new vault**.
+3. Choose a name and a local path.
+4. Click **Create** to initialize the vault.
+
+---
+
+### 🔌 Step 6: Install & Configure LiveSync Plugin
+
+1. Go to **Settings → Community plugins**.
+2. Enable community plugins.
+3. Click **Browse** and search for **Self-hosted LiveSync**.
+4. Install and enable the plugin.
+
+#### 🛰️ Remote Database Configuration
+
+1. Click the **🛰️ Remote Database Configuration** button in the plugin settings.
+2. Fill in:
+
+```text
+Remote Type: CouchDB
+URI: https://obsidian.your-domain.com
+Username: obsidian_user
+Password: YOUR_VERY_STRONG_PASSWORD
+Database Name: obsidiandb
