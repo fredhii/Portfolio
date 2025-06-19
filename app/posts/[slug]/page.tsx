@@ -23,7 +23,7 @@ export default async function Post({ params }: { params: { slug: string } }) {
     notFound()
   }
 
-  const { metadata, content } = post
+  const { metadata, compiledContent } = post
   const { title, image, author, publishedAt } = metadata
 
   return (
@@ -56,7 +56,7 @@ export default async function Post({ params }: { params: { slug: string } }) {
         </header>
 
         <main className='prose mt-16 dark:prose-invert'>
-          <MDXContent source={content} />
+          {compiledContent}
         </main>
 
         <footer className='mt-16'>

@@ -14,13 +14,25 @@ const components = {
   Counter
 }
 
-export default function MDXContent(
-  props: JSX.IntrinsicAttributes & MDXRemoteProps
-) {
+type MDXContentProps = MDXRemoteProps & {
+  children?: React.ReactNode
+}
+
+export default function MDXContent(props: MDXContentProps) {
+  // If props.source is provided, use MDXRemote (for raw MDX content)
+  if (props.source) {
+    return (
+      <MDXRemote
+        {...props}
+        components={{ ...components, ...(props.components || {}) }}
+      />
+    )
+  }
+  
+  // If props.children is provided, render the compiled content directly
   return (
-    <MDXRemote
-      {...props}
-      components={{ ...components, ...(props.components || {}) }}
-    />
+    <div className="mdx-content">
+      {props.children}
+    </div>
   )
 }
