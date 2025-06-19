@@ -134,19 +134,17 @@ Head to **Configuration** in the sidebar.
 
 Click **+ Add Option** and enter the following settings:
 
-| Section       | Name                    | Value                                                              |
-|---------------|-------------------------|--------------------------------------------------------------------|
-| `chttpd`      | `require_valid_user`    | `true`                                                             |
-| `chttpd_auth` | `require_valid_user`    | `true`                                                             |
-| `httpd`       | `WWW-Authenticate`      | `Basic realm="couchdb"`                                            |
-| `httpd`       | `enable_cors`           | `true`                                                             |
-| `chttpd`      | `enable_cors`           | `true`                                                             |
-| `chttpd`      | `max_http_request_size` | `4294967296`                                                       |
-| `couchdb`     | `max_document_size`     | `50000000`                                                         |
-| `cors`        | `credentials`           | `true`                                                             |
-| `cors`        | `origins`               | `app://obsidian.md, capacitor://localhost, http://localhost`      |
-
-
+| Section | Name | Value |
+|---------|------|-------|
+| `chttpd` | `require_valid_user` | `true` |
+| `chttpd_auth` | `require_valid_user` | `true` |
+| `httpd` | `WWW-Authenticate` | `Basic realm="couchdb"` |
+| `httpd` | `enable_cors` | `true` |
+| `chttpd` | `enable_cors` | `true` |
+| `chttpd` | `max_http_request_size` | `4294967296` |
+| `couchdb` | `max_document_size` | `50000000` |
+| `cors` | `credentials` | `true` |
+| `cors` | `origins` | `app://obsidian.md, capacitor://localhost, http://localhost` |
 
 Click **Save Changes** after each addition.
 
