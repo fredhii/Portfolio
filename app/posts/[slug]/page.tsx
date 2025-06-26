@@ -16,8 +16,9 @@ export async function generateStaticParams() {
   return slugs
 }
 
-export async function generateMetadata({ params }: { params: { slug: string } }): Promise<Metadata> {
-  const post = await getPostBySlug(params.slug)
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params
+  const post = await getPostBySlug(slug)
   
   if (!post) {
     return {
@@ -27,7 +28,7 @@ export async function generateMetadata({ params }: { params: { slug: string } })
   }
 
   const { title, summary, image, author, publishedAt } = post.metadata
-  const url = `https://fredhii.com/posts/${params.slug}`
+  const url = `https://fredhii.com/posts/${slug}`
 
   return {
     title: title ? `${title} | Fredy Acuna` : 'Fredy Acuna',
@@ -63,8 +64,8 @@ export async function generateMetadata({ params }: { params: { slug: string } })
   }
 }
 
-export default async function Post({ params }: { params: { slug: string } }) {
-  const { slug } = params
+export default async function Post({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params
   const post = await getPostBySlug(slug)
 
   if (!post) {
