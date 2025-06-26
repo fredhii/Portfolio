@@ -20,6 +20,20 @@ export type PostMetadata = {
   author?: string
   publishedAt?: string
   slug: string
+  readingTime?: string
+  wordCount?: number
+}
+
+// Calculate reading time and word count
+function calculateReadingStats(content: string) {
+  const wordsPerMinute = 200
+  const words = content.trim().split(/\s+/).length
+  const minutes = Math.ceil(words / wordsPerMinute)
+  
+  return {
+    wordCount: words,
+    readingTime: `${minutes} min read`
+  }
 }
 
 export async function getPostBySlug(slug: string): Promise<Post | null> {
@@ -27,6 +41,9 @@ export async function getPostBySlug(slug: string): Promise<Post | null> {
     const filePath = path.join(rootDirectory, `${slug}.mdx`)
     const fileContent = fs.readFileSync(filePath, { encoding: 'utf8' })
     const { data, content } = matter(fileContent)
+    
+    // Calculate reading stats
+    const { wordCount, readingTime } = calculateReadingStats(content)
     
     // Compile the MDX content with remark-gfm plugin and custom components
     const { content: compiledContent } = await compileMDX({
@@ -40,7 +57,7 @@ export async function getPostBySlug(slug: string): Promise<Post | null> {
     })
 
     return { 
-      metadata: { ...data, slug }, 
+      metadata: { ...data, slug, wordCount, readingTime }, 
       content,
       compiledContent 
     }

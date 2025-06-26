@@ -1,0 +1,196 @@
+---
+title: "Cómo Acceder y Solucionar el Login del Módem Claro Hefei Radiotech"
+summary: "Una guía paso a paso para acceder a la configuración avanzada del módem Claro Hefei Radiotech RTCD905H6W4 DOCSIS 3.0 y una solución permanente para el problema común de actualización de firmware que redirige y bloquea el acceso al login usando uBlock Origin."
+image: '/images/posts/how-to-fix-claro-modem-login.webp'
+author: 'Fredy Acuna'
+publishedAt: '2025-06-25'
+---
+
+Esta guía proporciona un tutorial paso a paso sobre cómo acceder al panel de configuración avanzada del módem **Hefei Radiotech RTCD905H6W4 (DOCSIS 3.0 eMTA)**, proporcionado por Claro. También incluye una solución crucial para un problema común de actualización de firmware que impide el acceso al login.
+
+## Paso 1: Encontrar la Puerta de Enlace Predeterminada de tu Módem
+
+Para conectarte a tu módem, primero necesitas encontrar su dirección IP, también conocida como "Puerta de Enlace Predeterminada".
+
+### Para Usuarios de Windows:
+
+1.  Abre el Símbolo del Sistema. Puedes hacerlo buscando 'cmd' en el Menú Inicio.
+2.  Escribe el siguiente comando y presiona Enter:
+```bash
+ipconfig
+```
+3.  En los resultados, busca la dirección "Puerta de Enlace Predeterminada" bajo tu conexión de red activa. Típicamente es algo como '192.168.20.1'.
+
+### Para Usuarios de macOS:
+
+1.  Abre Terminal. Puedes encontrarlo en Aplicaciones > Utilidades > Terminal, o buscar "Terminal" usando Spotlight (Cmd + Espacio).
+2.  Escribe el siguiente comando y presiona Enter:
+```bash
+netstat -nr | grep default
+```
+3.  En los resultados, busca la entrada "default". La dirección IP junto a ella es tu Puerta de Enlace Predeterminada, típicamente algo como '192.168.20.1'.
+
+### Alternativa para macOS (si lo anterior no funciona):
+
+También puedes usar este comando en Terminal:
+```bash
+route -n get default
+```
+Busca la entrada "gateway" en la salida.
+
+---
+
+## Paso 2: Acceder a la Página de Login Avanzado
+
+El acceso estándar a la interfaz del módem a menudo está restringido. Para llegar a la página de login organizacional o avanzado, debes usar una URL específica.
+
+1.  Abre tu navegador web.
+2.  En la barra de direcciones, escribe la IP de la Puerta de Enlace Predeterminada que encontraste en el paso anterior.
+3.  Agrega la siguiente ruta a la dirección IP: '/login-org.html#cmInfo'
+
+La URL final debería verse así:
+
+**https://192.168.20.1/login-org.html#cmInfo**
+
+Después de presionar Enter, deberías ver la pantalla de login avanzado.
+
+<Image 
+  src="/images/posts/how-to-fix-claro-modem-login/login.png" 
+  alt="Pantalla de Login del Módem" 
+  width={800} 
+  height={400}
+/>
+
+## Paso 3: Usar las Credenciales Correctas
+
+Para iniciar sesión, usa las siguientes credenciales:
+
+* **USUARIO (Username):** admin
+* **CLAVE (Password):** ZP9Lw$fGyUD
+
+Si esas credenciales no funcionan, puedes probar otras combinaciones comunes.
+
+| USUARIO | CLAVE |
+|---|---|
+| admin | ZP9Lw$fGyUD |
+| admin | admin |
+| admin | cl@r0 |
+| admin | !T3lgu@ |
+| root | root |
+| Administrator | !T3lgu@ |
+| (Dejar vacío) | admin |
+
+*Nota: "(Dejar vacío)" significa dejar el campo de usuario vacío.*
+
+---
+
+## Solución de Problemas: Arreglando el Problema de Redirección del Login
+
+Muchos módems Hefei Radiotech RTCD905H6W4 han recibido una actualización de firmware del ISP (Claro) que bloquea el acceso a la configuración avanzada. Esta actualización te redirige desde la página de login correcta a una página de "fallo" ('http://192.168.20.1/login.html#fail').
+
+### La Causa
+
+La actualización de firmware agrega un fragmento específico de JavaScript a la página 'login-org.html'. Este script verifica si estás accediendo a la página desde una dirección IP local ('192.168...') y, si es así, te redirige lejos del formulario de login.
+
+Aquí está el código problemático:
+
+```javascript
+<script type="text/javascript">
+    var host = window.location.host;
+    lognote(host.indexOf("192.168"));
+    if (host.indexOf("192.168") != (-1)) {
+        window.location.href = 'http//' + window.location.host + '/' + '#fail';
+    }
+    $(function() {
+        $('input, textarea').placeholder();
+    });
+</script>
+```
+
+### La Solución: Evitar la Redirección con uBlock Origin
+
+Para solucionar esto, puedes usar la extensión del navegador **uBlock Origin** para bloquear el script que ejecuta la redirección.
+
+<Image 
+  src="/images/posts/how-to-fix-claro-modem-login/uBlock.png" 
+  alt="Logo de la extensión uBlock Origin" 
+  width={800} 
+  height={400}
+/>
+
+**Nota:** El usuario que proporcionó esta solución notó que tuvo que usar el navegador **Brave** para instalar y configurar la extensión exitosamente.
+
+1.  **Instalar uBlock Origin:** Agrega la extensión uBlock Origin a un navegador basado en Chromium como Brave o Google Chrome desde sus respectivas tiendas web.
+
+2.  **Abrir Configuración de uBlock Origin:** Haz clic en el ícono de uBlock Origin en la barra de herramientas de tu navegador y haz clic en el ícono del **Panel de Control** (engranaje) para abrir la configuración.
+
+3.  **Ir a "Mis Filtros":** Navega a la pestaña "Mis filtros" en el panel de control.
+
+4.  **Agregar la Regla de Filtro:** Copia y pega la siguiente regla en el área de texto:
+```
+192.168.20.1##+js(set-constant.js, host, "0.0.0.0")
+```
+    Esta regla le dice a uBlock que efectivamente oculte tu IP local real del script, lo que lo engaña para que no ejecute la redirección.
+    <Image 
+      src="/images/posts/how-to-fix-claro-modem-login/uBlockSettings.png" 
+      alt="Configuración de uBlock Origin mostrando el filtro personalizado" 
+      width={800} 
+      height={400}
+    />
+
+5.  **Aplicar Cambios:** Haz clic en el botón "Aplicar cambios".
+
+¡Y eso es todo! Ahora deberías poder acceder a la página de login avanzado en 'https://192.168.20.1/login-org.html#cmInfo' sin ser redirigido.
+
+---
+
+## Actualizando tu Contraseña WiFi
+
+Una vez que hayas iniciado sesión exitosamente, puedes actualizar tu contraseña WiFi para asegurar tu red. La opción de cambio de contraseña está oculta por defecto, pero puedes acceder a ella usando las herramientas de desarrollador de tu navegador.
+
+### Paso 1: Navegar a Configuración WiFi
+
+1.  Después de iniciar sesión, busca **Configuración WiFi** o **Configuración WiFi(5G)** en la interfaz del módem.
+2.  Haz clic en la sección de configuración WiFi apropiada.
+  <Image 
+      src="/images/posts/how-to-fix-claro-modem-login/selectWiFi.png"
+      alt="Seleccionando configuración WiFi en la interfaz del módem" 
+      width={800} 
+      height={400}
+    />
+
+### Paso 2: Acceder a las Herramientas de Desarrollador
+
+1.  En la sección **Algoritmo de Encriptación**, haz clic derecho en la página.
+2.  Selecciona **Inspeccionar** del menú contextual para abrir las herramientas de desarrollador de tu navegador.
+  <Image 
+      src="/images/posts/how-to-fix-claro-modem-login/rightClickInspect.png"
+      alt="Haciendo clic derecho y seleccionando Inspeccionar para abrir las herramientas de desarrollador" 
+      width={800} 
+      height={400}
+    />
+
+### Paso 3: Descomentar el Campo de Contraseña
+
+1.  En la pestaña "Elementos" de las herramientas de desarrollador, busca (Ctrl+F o Cmd+F) el código comentado `<!--li password`.
+2.  Elimina los marcadores de comentario (`<!--` y `-->`) para descomentar esta sección.
+3.  El campo de entrada de contraseña ahora aparecerá en la interfaz.
+
+### Paso 4: Actualizar tu Contraseña
+
+1.  Ingresa tu nueva contraseña WiFi en el campo de contraseña recién visible.
+  <Image 
+      src="/images/posts/how-to-fix-claro-modem-login/passwordDisplay.png"
+      alt="El nuevo campo de contraseña ahora es visible en la interfaz" 
+      width={800} 
+      height={400}
+    />
+2.  Haz clic en **Guardar Cambios** para aplicar la nueva contraseña.
+
+**Nota:** Asegúrate de recordar tu nueva contraseña. Necesitarás reconectar todos tus dispositivos WiFi a la red usando esta nueva contraseña.
+
+---
+
+## Conclusión
+
+Siguiendo esta guía, no solo has recuperado el acceso a la configuración avanzada de tu módem, sino que también has dado un paso crucial para asegurar tu red doméstica. Ahora tienes las herramientas y el conocimiento para gestionar tu módem Hefei Radiotech efectivamente. ¡Sigue explorando y mantente seguro! 
