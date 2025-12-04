@@ -1,0 +1,99 @@
+---
+  title: Nulltagram
+  summary: A full-stack Instagram clone built with React, Express, and Firebase.
+  image: /images/projects/nulltagram.jpg
+  author: 'Fredy Acuna'
+  publishedAt: '2024-12-04'
+---
+
+Nulltagram is a full-stack Instagram clone - a social media platform that enables users to share photos, interact through likes and comments, and build networks of followers. This project demonstrates modern full-stack development skills using contemporary technologies.
+
+**[Live Demo](https://nulltagram.fredhii.com)**
+
+## Features
+
+- **User Authentication**: Email/password signup and Google OAuth via Firebase Auth
+- **Photo Sharing**: Upload and share images with captions using Firebase Storage
+- **Social Interactions**: Like/unlike posts, comment on posts, follow/unfollow users
+- **User Profiles**: Customizable profiles with bio and avatar upload
+- **News Feed**: Paginated feed with posts from followed users
+- **API Documentation**: Interactive OpenAPI 3.0 docs at `/docs`
+
+## Tech Stack
+
+### Frontend
+- **React 18** with Vite for fast development
+- **React Router v6** for client-side routing
+- **Firebase SDK** for authentication and data management
+- **Materialize CSS** for responsive UI
+- **Lucide React** for icons
+
+### Backend
+- **Node.js 20+** with Express.js
+- **Firebase Admin SDK** for server-side operations
+- **Cloud Firestore** as NoSQL database
+- **Firebase Storage** for image hosting
+- **Scalar Express API Reference** for interactive documentation
+
+### DevOps
+- **Docker** and Docker Compose for containerization
+- **nginx** as reverse proxy for production
+- **pnpm** with workspace support for monorepo management
+
+## Architecture
+
+```
+Frontend (React + Vite)  <-- HTTP/JSON -->  Backend (Express.js)
+     ↓                                            ↓
+  Firebase Auth SDK                      Firebase Admin SDK
+                                               ↓
+                                    Cloud Firestore + Storage
+```
+
+The project uses a two-tier architecture with containerized deployment:
+- **Frontend Container**: nginx serving React build with API proxying
+- **Backend Container**: Node.js Express server
+- Both containers communicate via Docker network bridge
+
+## API Endpoints
+
+The RESTful API includes 16+ endpoints:
+
+- **Authentication**: `/signup`, `/signin`
+- **Posts**: `/allposts`, `/post/:id`, `/createpost`, `/delete-post/:id`, `/mypost`
+- **Interactions**: `/givelike`, `/removelike`, `/insert-comment`, `/delete-comment/:id`
+- **Users**: `/user/:id`, `/search-users`, `/follow`, `/unfollow`, `/update-profile`
+
+## Getting Started
+
+Clone the repository and install dependencies:
+
+```bash
+git clone https://github.com/yourusername/nulltagram
+cd nulltagram
+pnpm install
+```
+
+Run the development servers:
+
+```bash
+# Backend
+pnpm dev
+
+# Frontend (in another terminal)
+cd ntagram && pnpm dev
+```
+
+Or use Docker for production deployment:
+
+```bash
+docker compose up --build
+```
+
+## Notable Aspects
+
+- **Monorepo Structure**: Uses pnpm workspaces for efficient dependency management
+- **Interactive API Docs**: OpenAPI 3.0 specification with Scalar UI
+- **JWT Authentication**: Middleware-based token verification on protected routes
+- **Production Ready**: Full Docker containerization with nginx reverse proxy
+- **Comprehensive Testing**: Vitest and React Testing Library for frontend tests
