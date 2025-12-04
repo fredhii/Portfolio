@@ -4,13 +4,14 @@ import matter from 'gray-matter'
 import { compileMDX } from 'next-mdx-remote/rsc'
 import remarkGfm from 'remark-gfm'
 import { mdxComponents } from './mdx-components'
+import type { ReactElement } from 'react'
 
 const rootDirectory = path.join(process.cwd(), 'content', 'posts')
 
 export type Post = {
   metadata: PostMetadata
   content: string
-  compiledContent?: any
+  compiledContent?: ReactElement
 }
 
 export type PostMetadata = {

@@ -3,7 +3,6 @@ import Image from 'next/image'
 import type { Metadata } from 'next'
 
 import { formatDate } from '@/lib/utils'
-import MDXContent from '@/components/mdx-content'
 import { getPosts, getPostBySlug } from '@/lib/posts'
 import { ArrowLeftIcon } from '@radix-ui/react-icons'
 import { notFound } from 'next/navigation'
@@ -126,6 +125,8 @@ export default async function Post({ params }: { params: Promise<{ slug: string 
                 alt={title || ''}
                 className='object-cover'
                 fill
+                priority
+                sizes='(max-width: 768px) 100vw, 768px'
               />
             </div>
           )}

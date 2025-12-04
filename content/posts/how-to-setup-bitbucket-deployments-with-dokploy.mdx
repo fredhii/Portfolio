@@ -1,0 +1,200 @@
+---
+title: 'How to Set Up Bitbucket Deployments with Dokploy'
+summary: 'A complete guide to connecting your Bitbucket repositories to Dokploy for seamless deployments. Learn how to configure API tokens, set up webhooks, and enable automatic deployments for your applications.'
+image: '/images/posts/how-to-setup-bitbucket-deployments-with-dokploy.webp'
+author: 'Fredy Acuna'
+publishedAt: '2025-12-04'
+---
+
+### Deploy from Bitbucket to Dokploy: Complete Setup Guide
+
+[Dokploy](https://dokploy.com) is a powerful self-hosted platform that simplifies application deployment. One of its most useful features is the ability to connect directly to your Git repositories, including Bitbucket. This guide walks you through everything you need to configure Bitbucket deployments in Dokploy.
+
+---
+
+### What You'll Learn
+
+- How to create and configure a Bitbucket API Token
+- Connecting your Bitbucket account to Dokploy
+- Setting up automatic deployments with webhooks
+- Troubleshooting common issues
+
+---
+
+### Prerequisites
+
+Before starting, make sure you have:
+
+- A [Dokploy](https://dokploy.com) instance up and running
+- A Bitbucket account with at least one repository
+- Admin access to your Bitbucket workspace (if using workspaces)
+
+---
+
+### Part 1: Creating a Bitbucket API Token
+
+> **Important:** Bitbucket App Passwords are deprecated for new providers. Use an API Token instead. Existing providers with App Passwords will continue to work until **June 9th, 2026**.
+
+#### Step 1: Access Bitbucket Settings
+
+1. Log in to your Bitbucket account
+2. Navigate to [Bitbucket API Token Settings](https://id.atlassian.com/manage-profile/security/api-tokens)
+3. Click on **Create API token**
+
+#### Step 2: Configure the Token
+
+1. **Token Name**: Enter a descriptive name (e.g., `Dokploy-Deployment`)
+2. **Expiration**: Select an expiration date (maximum 1 year)
+3. **Product**: Select **Bitbucket**
+
+#### Step 3: Select Required Scopes
+
+Select the following scopes to grant Dokploy the necessary permissions:
+
+| Scope | Purpose |
+|-------|---------|
+| `read:repository:bitbucket` | Read repository contents |
+| `read:pullrequest:bitbucket` | Read pull request information |
+| `read:webhook:bitbucket` | Read existing webhooks |
+| `read:workspace:bitbucket` | Access workspace information |
+| `write:webhook:bitbucket` | Create and manage webhooks |
+
+#### Step 4: Save Your Token
+
+1. Click **Create**
+2. **Copy the token immediately** — you won't be able to see it again
+3. Store it securely (password manager recommended)
+
+---
+
+### Part 2: Connecting Bitbucket to Dokploy
+
+Now that you have your API token, let's connect it to Dokploy.
+
+#### Step 1: Open Git Settings in Dokploy
+
+1. Log in to your Dokploy dashboard
+2. Navigate to **Settings** → **Git**
+3. Select **Bitbucket** as the source provider
+
+#### Step 2: Enter Your Credentials
+
+Fill in the following fields:
+
+| Field | Description |
+|-------|-------------|
+| **Bitbucket Username** | Your Bitbucket username (found in account settings) |
+| **API Token** | The token you created in Part 1 |
+| **Workspace** (Optional) | Your workspace slug if using workspaces |
+
+> **Tip:** If you're using workspaces, make sure to use the **slugified name**. For example, if your workspace is called "Dokploy Workspace", the slug would be `dokploy-workspace`. You can find your workspace slug at [bitbucket.org/account/workspaces](https://bitbucket.org/account/workspaces).
+
+#### Step 3: Test the Connection
+
+1. Click **Configure Bitbucket**
+2. Click the **Update** icon
+3. Click **Test Connection** to verify everything is working
+
+If successful, you'll see a confirmation message. Your Bitbucket repositories are now accessible in Dokploy!
+
+---
+
+### Part 3: Setting Up Automatic Deployments
+
+Dokploy supports automatic deployments triggered by pushes to your repository. This works for both **Applications** and **Docker Compose** services.
+
+#### Step 1: Get the Webhook URL
+
+1. Go to your **Application** or **Docker Compose** service in Dokploy
+2. Navigate to the **Deployments** tab
+3. Copy the **Webhook URL** provided
+
+#### Step 2: Create the Webhook in Bitbucket
+
+1. Go to your repository on Bitbucket
+2. Click **Repository Settings** in the left sidebar
+3. Select **Webhooks**
+4. Click **Add webhook**
+
+#### Step 3: Configure the Webhook
+
+| Field | Value |
+|-------|-------|
+| **Title** | `Dokploy Auto Deploy` (or any name you prefer) |
+| **URL** | Paste the webhook URL from Dokploy |
+| **Triggers** | Select **Push** under "Repository" events |
+
+#### Step 4: Save and Test
+
+1. Click **Save**
+2. Make a test commit and push to your repository
+3. Check Dokploy — your application should automatically start deploying!
+
+---
+
+### Legacy Setup: Using App Passwords (Deprecated)
+
+> **Warning:** This method is deprecated and will stop working on **June 9th, 2026**. We recommend using API Tokens instead.
+
+If you're still using App Passwords, here's the legacy setup:
+
+1. Go to [Bitbucket App Passwords](https://bitbucket.org/account/settings/app-passwords/new)
+2. Set a **Label** (e.g., `Dokploy-Bitbucket-App`)
+3. Select the following permissions:
+   - **Account**: Read
+   - **Workspace membership**: Read
+   - **Projects**: Read
+   - **Repositories**: Read
+   - **Pull requests**: Read
+   - **Webhooks**: Read and Write
+4. Click **Create** and copy the password
+5. Use this password in Dokploy's Bitbucket configuration
+
+---
+
+### Troubleshooting
+
+#### Connection Failed
+
+- **Verify your username**: Make sure you're using your Bitbucket username, not your email
+- **Check the API token**: Ensure it hasn't expired and has the correct scopes
+- **Workspace issues**: If using workspaces, double-check the slug is correct (lowercase, hyphenated)
+
+#### Webhooks Not Triggering
+
+- **Check the webhook URL**: Make sure it's copied correctly without extra spaces
+- **Verify triggers**: Ensure "Push" events are selected
+- **Check Dokploy logs**: Look for any incoming webhook errors
+- **Firewall rules**: Ensure Bitbucket can reach your Dokploy instance
+
+#### Repository Not Showing
+
+- **Refresh the connection**: Click "Test Connection" in Dokploy
+- **Check permissions**: Verify your API token has `read:repository:bitbucket` scope
+- **Workspace access**: Ensure you have access to the workspace containing the repository
+
+---
+
+### Best Practices
+
+1. **Use API Tokens over App Passwords** — They're more secure and offer better control
+2. **Set token expiration reminders** — API tokens expire after a maximum of 1 year
+3. **Use dedicated tokens per service** — Create separate tokens for different services for better security
+4. **Monitor your deployments** — Regularly check Dokploy logs for any failed deployments
+5. **Use branch protection** — Configure which branches trigger deployments in your Dokploy settings
+
+---
+
+### Conclusion
+
+You've successfully connected Bitbucket to Dokploy! Your repositories are now accessible for deployment, and automatic deployments are configured via webhooks. Every time you push to your configured branch, Dokploy will automatically pull the latest changes and redeploy your application.
+
+For more information, check out the official [Dokploy Documentation](https://docs.dokploy.com) and [Bitbucket API Documentation](https://developer.atlassian.com/cloud/bitbucket/).
+
+---
+
+### Related Resources
+
+- [Dokploy Official Documentation](https://docs.dokploy.com)
+- [Bitbucket API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
+- [Bitbucket Webhooks Guide](https://support.atlassian.com/bitbucket-cloud/docs/manage-webhooks/)

@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import Image from 'next/image'
+import type { Metadata } from 'next'
 
 import { formatDate } from '@/lib/utils'
 import MDXContent from '@/components/mdx-content'
@@ -12,6 +13,59 @@ export async function generateStaticParams() {
   const slugs = projects.map(project => ({ slug: project.slug }))
 
   return slugs
+}
+
+export async function generateMetadata({
+  params
+}: {
+  params: Promise<{ slug: string }>
+}): Promise<Metadata> {
+  const { slug } = await params
+  const project = await getProjectBySlug(slug)
+
+  if (!project) {
+    return {
+      title: 'Project Not Found',
+      description: 'The requested project could not be found.'
+    }
+  }
+
+  const { title, summary, image, author } = project.metadata
+  const url = `https://fredhii.com/projects/${slug}`
+
+  return {
+    title: title || 'Project',
+    description: summary || 'A project by Fredy Acuna',
+    authors: [{ name: author || 'Fredy Acuna' }],
+    openGraph: {
+      title: title || 'Fredy Acuna',
+      description: summary || 'A project by Fredy Acuna',
+      url,
+      siteName: 'Fredy Acuna',
+      images: image
+        ? [
+            {
+              url: `https://fredhii.com${image}`,
+              width: 1200,
+              height: 630,
+              alt: title || 'Project image'
+            }
+          ]
+        : [],
+      locale: 'en_US',
+      type: 'article'
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: title || 'Fredy Acuna',
+      description: summary || 'A project by Fredy Acuna',
+      images: image ? [`https://fredhii.com${image}`] : [],
+      creator: '@fredhii'
+    },
+    alternates: {
+      canonical: url
+    }
+  }
 }
 
 export default async function Project({
@@ -47,6 +101,8 @@ export default async function Project({
               alt={title || ''}
               className='object-cover'
               fill
+              priority
+              sizes='(max-width: 768px) 100vw, 768px'
             />
           </div>
         )}

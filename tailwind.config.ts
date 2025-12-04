@@ -1,5 +1,7 @@
-const { fontFamily } = require('tailwindcss/defaultTheme')
 import type { Config } from 'tailwindcss'
+import defaultTheme from 'tailwindcss/defaultTheme'
+import tailwindcssAnimate from 'tailwindcss-animate'
+import typography from '@tailwindcss/typography'
 
 const config = {
   darkMode: ['class'],
@@ -20,8 +22,8 @@ const config = {
     },
     extend: {
       fontFamily: {
-        sans: ['var(--font-sans)', ...fontFamily.sans],
-        serif: ['var(--font-serif)', ...fontFamily.serif]
+        sans: ['var(--font-sans)', ...defaultTheme.fontFamily.sans],
+        serif: ['var(--font-serif)', ...defaultTheme.fontFamily.serif]
       },
       colors: {
         border: 'hsl(var(--border))',
@@ -79,7 +81,7 @@ const config = {
       }
     }
   },
-  plugins: [require('tailwindcss-animate'), require('@tailwindcss/typography')]
+  plugins: [tailwindcssAnimate, typography]
 } satisfies Config
 
 export default config

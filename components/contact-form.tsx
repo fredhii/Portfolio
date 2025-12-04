@@ -1,156 +1,294 @@
 'use client'
 
-import { z } from 'zod'
-import Link from 'next/link'
+import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
-import { SubmitHandler, useForm } from 'react-hook-form'
+import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ContactFormSchema } from '@/lib/schemas'
+import { ContactFormSchema, ContactSubjects, type ContactFormData } from '@/lib/schemas'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { Select } from '@/components/ui/select'
+import { Label } from '@/components/ui/label'
 import { sendEmail } from '@/lib/actions'
+import {
+  CheckCircledIcon,
+  CrossCircledIcon,
+  PaperPlaneIcon,
+  ReloadIcon,
+  PersonIcon,
+  EnvelopeClosedIcon,
+  ChatBubbleIcon
+} from '@radix-ui/react-icons'
 
-type Inputs = z.infer<typeof ContactFormSchema>
+const MAX_MESSAGE_LENGTH = 5000
 
 export default function ContactForm() {
+  const [formTimestamp, setFormTimestamp] = useState<number>(0)
+  const [isSuccess, setIsSuccess] = useState(false)
+
   const {
     register,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting }
-  } = useForm<Inputs>({
+    watch,
+    formState: { errors, isSubmitting, isValid, dirtyFields }
+  } = useForm<ContactFormData>({
     resolver: zodResolver(ContactFormSchema),
+    mode: 'onChange',
     defaultValues: {
       name: '',
       email: '',
-      message: ''
+      subject: undefined,
+      message: '',
+      website: '',
+      timestamp: 0
     }
   })
 
-  const processForm: SubmitHandler<Inputs> = async data => {
-    const result = await sendEmail(data)
+  // Set timestamp when form loads (for bot detection)
+  useEffect(() => {
+    setFormTimestamp(Date.now())
+  }, [])
+
+  const messageValue = watch('message') || ''
+  const messageLength = messageValue.length
+
+  const processForm = async (data: ContactFormData) => {
+    // Add timestamp for bot detection
+    const dataWithTimestamp = {
+      ...data,
+      timestamp: formTimestamp
+    }
+
+    const result = await sendEmail(dataWithTimestamp)
 
     if (result?.error) {
-      toast.error('An error occurred! Please try again.')
+      const errorMessage =
+        typeof result.error === 'string'
+          ? result.error
+          : 'An error occurred. Please try again.'
+      toast.error(errorMessage)
       return
     }
 
+    setIsSuccess(true)
     toast.success('Message sent successfully!')
     reset()
+
+    // Reset success state after animation
+    setTimeout(() => setIsSuccess(false), 3000)
   }
 
   return (
-    <section className='relative isolate'>
-      {/* Background pattern */}
-      <svg
-        className='absolute inset-0 -z-10 h-full w-full stroke-zinc-200 opacity-75 [mask-image:radial-gradient(100%_100%_at_top_right,white,transparent)] dark:stroke-zinc-700'
-        aria-hidden='true'
-      >
-        <defs>
-          <pattern
-            id='83fd4e5a-9d52-42fc-97b6-718e5d7ee527'
-            width={200}
-            height={200}
-            x='50%'
-            y={-64}
-            patternUnits='userSpaceOnUse'
-          >
-            <path d='M100 200V.5M.5 .5H200' fill='none' />
-          </pattern>
-        </defs>
-        <svg
-          x='50%'
-          y={-64}
-          className='overflow-visible fill-zinc-50 dark:fill-zinc-900/75'
-        >
-          <path
-            d='M-100.5 0h201v201h-201Z M699.5 0h201v201h-201Z M499.5 400h201v201h-201Z M299.5 800h201v201h-201Z'
-            strokeWidth={0}
-          />
-        </svg>
-        <rect
-          width='100%'
-          height='100%'
-          strokeWidth={0}
-          fill='url(#83fd4e5a-9d52-42fc-97b6-718e5d7ee527)'
-        />
-      </svg>
+    <div className='relative'>
+      {/* Card container */}
+      <div className='rounded-2xl border border-border/50 bg-card/50 p-6 shadow-lg backdrop-blur-sm sm:p-8'>
+        {/* Form header */}
+        <div className='mb-8'>
+          <h2 className='text-xl font-semibold'>Send a message</h2>
+          <p className='mt-1 text-sm text-muted-foreground'>
+            Fill out the form below and I&apos;ll get back to you shortly.
+          </p>
+        </div>
 
-      {/* Form */}
-      <div className='relative'>
         <form
           onSubmit={handleSubmit(processForm)}
-          className='mt-16 lg:flex-auto'
+          className='space-y-6'
           noValidate
         >
-          <div className='grid grid-cols-1 gap-6 sm:grid-cols-2'>
-            {/* Name */}
-            <div>
-              <Input
-                id='name'
+          {/* Honeypot field - hidden from users, visible to bots */}
+          <div className='absolute -left-[9999px]' aria-hidden='true'>
+            <label htmlFor='website'>
+              Website
+              <input
                 type='text'
-                placeholder='Name'
-                autoComplete='given-name'
-                {...register('name')}
+                id='website'
+                tabIndex={-1}
+                autoComplete='off'
+                {...register('website')}
               />
+            </label>
+          </div>
 
+          <div className='grid grid-cols-1 gap-5 sm:grid-cols-2'>
+            {/* Name Field */}
+            <div className='space-y-2'>
+              <Label htmlFor='name' required>
+                Name
+              </Label>
+              <div className='relative'>
+                <PersonIcon className='absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground' />
+                <Input
+                  id='name'
+                  type='text'
+                  placeholder='John Doe'
+                  autoComplete='name'
+                  error={!!errors.name}
+                  aria-invalid={errors.name ? 'true' : 'false'}
+                  aria-describedby={errors.name ? 'name-error' : undefined}
+                  className='pl-10'
+                  {...register('name')}
+                />
+              </div>
               {errors.name?.message && (
-                <p className='ml-1 mt-2 text-sm text-rose-400'>
+                <p
+                  id='name-error'
+                  className='flex items-center gap-1.5 text-sm text-destructive'
+                  role='alert'
+                >
+                  <CrossCircledIcon className='h-4 w-4 shrink-0' />
                   {errors.name.message}
                 </p>
               )}
             </div>
 
-            {/* Email */}
-            <div>
-              <Input
-                type='email'
-                id='email'
-                autoComplete='email'
-                placeholder='Email'
-                {...register('email')}
-              />
-
+            {/* Email Field */}
+            <div className='space-y-2'>
+              <Label htmlFor='email' required>
+                Email
+              </Label>
+              <div className='relative'>
+                <EnvelopeClosedIcon className='absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground' />
+                <Input
+                  id='email'
+                  type='email'
+                  placeholder='john@example.com'
+                  autoComplete='email'
+                  error={!!errors.email}
+                  aria-invalid={errors.email ? 'true' : 'false'}
+                  aria-describedby={errors.email ? 'email-error' : undefined}
+                  className='pl-10'
+                  {...register('email')}
+                />
+              </div>
               {errors.email?.message && (
-                <p className='ml-1 mt-2 text-sm text-rose-400'>
+                <p
+                  id='email-error'
+                  className='flex items-center gap-1.5 text-sm text-destructive'
+                  role='alert'
+                >
+                  <CrossCircledIcon className='h-4 w-4 shrink-0' />
                   {errors.email.message}
                 </p>
               )}
             </div>
+          </div>
 
-            {/* Message */}
-            <div className='sm:col-span-2'>
+          {/* Subject Field */}
+          <div className='space-y-2'>
+            <Label htmlFor='subject' required>
+              Subject
+            </Label>
+            <Select
+              id='subject'
+              error={!!errors.subject}
+              aria-invalid={errors.subject ? 'true' : 'false'}
+              aria-describedby={errors.subject ? 'subject-error' : undefined}
+              {...register('subject')}
+            >
+              <option value='' disabled>
+                What is this about?
+              </option>
+              {ContactSubjects.map((subject) => (
+                <option key={subject.value} value={subject.value}>
+                  {subject.label}
+                </option>
+              ))}
+            </Select>
+            {errors.subject?.message && (
+              <p
+                id='subject-error'
+                className='flex items-center gap-1.5 text-sm text-destructive'
+                role='alert'
+              >
+                <CrossCircledIcon className='h-4 w-4 shrink-0' />
+                {errors.subject.message}
+              </p>
+            )}
+          </div>
+
+          {/* Message Field */}
+          <div className='space-y-2'>
+            <div className='flex items-center justify-between'>
+              <Label htmlFor='message' required>
+                Message
+              </Label>
+              <span
+                className={`text-xs tabular-nums transition-colors ${
+                  messageLength > MAX_MESSAGE_LENGTH
+                    ? 'text-destructive'
+                    : messageLength > MAX_MESSAGE_LENGTH * 0.9
+                      ? 'text-yellow-600 dark:text-yellow-500'
+                      : 'text-muted-foreground'
+                }`}
+              >
+                {messageLength.toLocaleString()} / {MAX_MESSAGE_LENGTH.toLocaleString()}
+              </span>
+            </div>
+            <div className='relative'>
+              <ChatBubbleIcon className='absolute left-3 top-3 h-4 w-4 text-muted-foreground' />
               <Textarea
-                rows={4}
-                placeholder='Message'
+                id='message'
+                placeholder='Tell me about your project, question, or just say hello...'
+                rows={5}
+                error={!!errors.message}
+                aria-invalid={errors.message ? 'true' : 'false'}
+                aria-describedby={errors.message ? 'message-error' : 'message-hint'}
+                className='pl-10'
                 {...register('message')}
               />
-
-              {errors.message?.message && (
-                <p className='ml-1 mt-2 text-sm text-rose-400'>
-                  {errors.message.message}
-                </p>
-              )}
             </div>
+            {errors.message?.message && (
+              <p
+                id='message-error'
+                className='flex items-center gap-1.5 text-sm text-destructive'
+                role='alert'
+              >
+                <CrossCircledIcon className='h-4 w-4 shrink-0' />
+                {errors.message.message}
+              </p>
+            )}
+            {!errors.message && messageLength < 10 && messageLength > 0 && (
+              <p id='message-hint' className='text-xs text-muted-foreground'>
+                {10 - messageLength} more characters needed
+              </p>
+            )}
           </div>
-          <div className='mt-6'>
+
+          {/* Submit Button */}
+          <div className='pt-2'>
             <Button
               type='submit'
-              disabled={isSubmitting}
-              className='w-full disabled:opacity-50'
+              disabled={isSubmitting || !isValid}
+              size='lg'
+              className='w-full gap-2 transition-all duration-200'
             >
-              {isSubmitting ? 'Submitting...' : 'Contact Us'}
+              {isSubmitting ? (
+                <>
+                  <ReloadIcon className='h-4 w-4 animate-spin' />
+                  Sending...
+                </>
+              ) : isSuccess ? (
+                <>
+                  <CheckCircledIcon className='h-4 w-4' />
+                  Sent!
+                </>
+              ) : (
+                <>
+                  <PaperPlaneIcon className='h-4 w-4' />
+                  Send Message
+                </>
+              )}
             </Button>
           </div>
-          <p className='mt-4 text-xs text-muted-foreground'>
-            By submitting this form, I agree to the{' '}
-            <Link href='/privacy' className='font-bold'>
-              privacy&nbsp;policy.
-            </Link>
+
+          {/* Privacy Notice */}
+          <p className='text-center text-xs text-muted-foreground'>
+            Your information is secure and will never be shared with third parties.
           </p>
         </form>
       </div>
-    </section>
+    </div>
   )
 }
