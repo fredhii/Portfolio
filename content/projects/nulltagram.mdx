@@ -8,9 +8,1497 @@
 
 Nulltagram is a full-stack Instagram clone - a social media platform that enables users to share photos, interact through likes and comments, and build networks of followers. This project demonstrates modern full-stack development skills using contemporary technologies.
 
-**[Live Demo](https://nulltagram.fredhii.com)**
+**[Live Demo](https://nulltagram.fredhii.com)** | **[GitHub Repository](https://github.com/fredhii/nulltagram)**
 
-## Features
+---
+
+## Tutorial: Build Your Own Instagram Clone
+
+This comprehensive tutorial will guide you through building Nulltagram from scratch. By the end, you'll have a fully functional social media platform with authentication, image uploads, and social features.
+
+### Prerequisites
+
+- Node.js 20+ installed
+- pnpm package manager (`npm install -g pnpm`)
+- A Firebase account
+- Basic knowledge of React, Express.js, and JavaScript
+
+---
+
+## Part 1: Project Setup
+
+### 1.1 Initialize the Project Structure
+
+Create the project directory and initialize the monorepo:
+
+```bash
+mkdir nulltagram && cd nulltagram
+pnpm init
+```
+
+Create `pnpm-workspace.yaml` for monorepo management:
+
+```yaml
+packages:
+  - 'ntagram'
+```
+
+### 1.2 Project Structure Overview
+
+Our final structure will look like this:
+
+```
+nulltagram/
+├── app.js                    # Express server entry
+├── package.json              # Backend dependencies
+├── pnpm-workspace.yaml       # Monorepo config
+├── config/
+│   └── firebase.js           # Firebase Admin SDK
+├── middleware/
+│   └── requireLogin.js       # Auth middleware
+├── routes/
+│   ├── auth.js               # Authentication routes
+│   ├── post.js               # Post CRUD routes
+│   └── user.js               # User routes
+└── ntagram/                  # React frontend
+    ├── src/
+    │   ├── App.jsx
+    │   ├── config/
+    │   ├── components/
+    │   ├── context/
+    │   ├── reducers/
+    │   └── utils/
+    └── package.json
+```
+
+---
+
+## Part 2: Firebase Setup
+
+### 2.1 Create a Firebase Project
+
+1. Go to [Firebase Console](https://console.firebase.google.com)
+2. Click "Create a project" and follow the wizard
+3. Enable the following services:
+
+**Authentication:**
+- Go to Authentication > Sign-in method
+- Enable "Email/Password" provider
+- Enable "Google" provider
+
+**Firestore Database:**
+- Go to Firestore Database > Create database
+- Start in test mode (we'll add rules later)
+
+**Storage:**
+- Go to Storage > Get started
+- Start in test mode
+
+### 2.2 Get Firebase Credentials
+
+**For Frontend (Web App):**
+1. Go to Project Settings > General
+2. Under "Your apps", click the web icon `</>`
+3. Register your app and copy the config object
+
+**For Backend (Service Account):**
+1. Go to Project Settings > Service accounts
+2. Click "Generate new private key"
+3. Save the JSON file securely
+
+### 2.3 Configure Storage CORS
+
+Firebase Storage requires CORS configuration for browser uploads:
+
+```bash
+# Create cors.json
+echo '[{"origin":["*"],"method":["GET","POST","PUT","DELETE","HEAD"],"maxAgeSeconds":3600,"responseHeader":["Content-Type","Authorization"]}]' > cors.json
+
+# Apply CORS rules (requires gsutil)
+gsutil cors set cors.json gs://YOUR_PROJECT_ID.appspot.com
+```
+
+---
+
+## Part 3: Backend Development
+
+### 3.1 Install Backend Dependencies
+
+```bash
+pnpm add express cors firebase-admin @scalar/express-api-reference
+pnpm add -D nodemon
+```
+
+Update `package.json`:
+
+```json
+{
+  "name": "nulltagram",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon app.js",
+    "start": "node app.js"
+  }
+}
+```
+
+### 3.2 Firebase Admin Configuration
+
+Create `config/firebase.js`:
+
+```javascript
+import admin from 'firebase-admin';
+
+// Parse service account from environment variable
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+export const db = admin.firestore();
+export const auth = admin.auth();
+```
+
+### 3.3 Authentication Middleware
+
+Create `middleware/requireLogin.js`:
+
+```javascript
+import { auth, db } from '../config/firebase.js';
+
+const requireLogin = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized - No token provided' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    // Verify the Firebase ID token
+    const decodedToken = await auth.verifyIdToken(token);
+
+    // Fetch user data from Firestore
+    const userDoc = await db.collection('users').doc(decodedToken.uid).get();
+
+    if (!userDoc.exists) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    req.user = { _id: userDoc.id, ...userDoc.data() };
+    next();
+  } catch (error) {
+    console.error('Auth error:', error);
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+export default requireLogin;
+```
+
+### 3.4 Express Server Setup
+
+Create `app.js`:
+
+```javascript
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import { apiReference } from '@scalar/express-api-reference';
+
+import authRoutes from './routes/auth.js';
+import postRoutes from './routes/post.js';
+import userRoutes from './routes/user.js';
+
+const app = express();
+const PORT = process.env.PORT || 5001;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Routes
+app.use(authRoutes);
+app.use(postRoutes);
+app.use(userRoutes);
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// API Documentation
+app.use('/docs', apiReference({
+  spec: { url: '/openapi.json' },
+  theme: 'purple',
+}));
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+```
+
+### 3.5 Authentication Routes
+
+Create `routes/auth.js`:
+
+```javascript
+import express from 'express';
+import { db } from '../config/firebase.js';
+import requireLogin from '../middleware/requireLogin.js';
+
+const router = express.Router();
+
+// Create user profile after Firebase signup
+router.post('/create-profile', requireLogin, async (req, res) => {
+  try {
+    const { name, email, image } = req.body;
+    const userId = req.user._id;
+
+    const userData = {
+      _id: userId,
+      name: name || email.split('@')[0],
+      email,
+      image: image || null,
+      bio: null,
+      followers: [],
+      following: [],
+      createdAt: new Date().toISOString(),
+    };
+
+    await db.collection('users').doc(userId).set(userData);
+    res.json({ user: userData });
+  } catch (error) {
+    console.error('Create profile error:', error);
+    res.status(500).json({ error: 'Failed to create profile' });
+  }
+});
+
+// Get current user's profile
+router.get('/get-profile', requireLogin, async (req, res) => {
+  res.json(req.user);
+});
+
+export default router;
+```
+
+### 3.6 Post Routes
+
+Create `routes/post.js`:
+
+```javascript
+import express from 'express';
+import { db } from '../config/firebase.js';
+import requireLogin from '../middleware/requireLogin.js';
+
+const router = express.Router();
+
+// Helper: Populate post with user data
+const populatePost = async (post) => {
+  const userDoc = await db.collection('users').doc(post.postedBy).get();
+  const userData = userDoc.exists ? userDoc.data() : null;
+
+  // Populate comment authors
+  const populatedComments = await Promise.all(
+    (post.comments || []).map(async (comment) => {
+      const commentUserDoc = await db.collection('users').doc(comment.postedBy).get();
+      return {
+        ...comment,
+        postedBy: commentUserDoc.exists
+          ? { _id: commentUserDoc.id, name: commentUserDoc.data().name, image: commentUserDoc.data().image }
+          : { _id: comment.postedBy, name: 'Unknown' },
+      };
+    })
+  );
+
+  return {
+    ...post,
+    postedBy: userData
+      ? { _id: userDoc.id, name: userData.name, image: userData.image }
+      : { _id: post.postedBy, name: 'Unknown' },
+    comments: populatedComments,
+  };
+};
+
+// Get all posts with pagination
+router.get('/allposts', requireLogin, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    const cursor = req.query.cursor;
+
+    let query = db.collection('posts')
+      .orderBy('createdAt', 'desc')
+      .limit(limit + 1);
+
+    if (cursor) {
+      const cursorDoc = await db.collection('posts').doc(cursor).get();
+      if (cursorDoc.exists) {
+        query = query.startAfter(cursorDoc);
+      }
+    }
+
+    const snapshot = await query.get();
+    const posts = [];
+
+    for (const doc of snapshot.docs.slice(0, limit)) {
+      const postData = { _id: doc.id, ...doc.data() };
+      posts.push(await populatePost(postData));
+    }
+
+    const hasMore = snapshot.docs.length > limit;
+    const nextCursor = hasMore ? snapshot.docs[limit - 1].id : null;
+
+    res.json({ posts, nextCursor, hasMore });
+  } catch (error) {
+    console.error('Get posts error:', error);
+    res.status(500).json({ error: 'Failed to fetch posts' });
+  }
+});
+
+// Create a new post
+router.post('/createpost', requireLogin, async (req, res) => {
+  try {
+    const { title, body, url } = req.body;
+
+    if (!title || !url) {
+      return res.status(400).json({ error: 'Title and image are required' });
+    }
+
+    const postData = {
+      title,
+      body: body || '',
+      picture: url,
+      postedBy: req.user._id,
+      likes: [],
+      comments: [],
+      createdAt: new Date().toISOString(),
+    };
+
+    const docRef = await db.collection('posts').add(postData);
+    const post = { _id: docRef.id, ...postData };
+
+    res.json({ post: await populatePost(post) });
+  } catch (error) {
+    console.error('Create post error:', error);
+    res.status(500).json({ error: 'Failed to create post' });
+  }
+});
+
+// Like a post
+router.put('/givelike', requireLogin, async (req, res) => {
+  try {
+    const { postId } = req.body;
+    const postRef = db.collection('posts').doc(postId);
+
+    await postRef.update({
+      likes: admin.firestore.FieldValue.arrayUnion(req.user._id),
+    });
+
+    const updatedDoc = await postRef.get();
+    res.json({ post: await populatePost({ _id: postId, ...updatedDoc.data() }) });
+  } catch (error) {
+    console.error('Like error:', error);
+    res.status(500).json({ error: 'Failed to like post' });
+  }
+});
+
+// Unlike a post
+router.put('/removelike', requireLogin, async (req, res) => {
+  try {
+    const { postId } = req.body;
+    const postRef = db.collection('posts').doc(postId);
+
+    await postRef.update({
+      likes: admin.firestore.FieldValue.arrayRemove(req.user._id),
+    });
+
+    const updatedDoc = await postRef.get();
+    res.json({ post: await populatePost({ _id: postId, ...updatedDoc.data() }) });
+  } catch (error) {
+    console.error('Unlike error:', error);
+    res.status(500).json({ error: 'Failed to unlike post' });
+  }
+});
+
+// Add comment
+router.put('/insert-comment', requireLogin, async (req, res) => {
+  try {
+    const { postId, text } = req.body;
+    const postRef = db.collection('posts').doc(postId);
+
+    const comment = {
+      text,
+      postedBy: req.user._id,
+      createdAt: new Date().toISOString(),
+    };
+
+    await postRef.update({
+      comments: admin.firestore.FieldValue.arrayUnion(comment),
+    });
+
+    const updatedDoc = await postRef.get();
+    res.json({ post: await populatePost({ _id: postId, ...updatedDoc.data() }) });
+  } catch (error) {
+    console.error('Comment error:', error);
+    res.status(500).json({ error: 'Failed to add comment' });
+  }
+});
+
+// Delete post
+router.delete('/delete-post/:postId', requireLogin, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    if (postDoc.data().postedBy !== req.user._id) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    await db.collection('posts').doc(postId).delete();
+    res.json({ message: 'Post deleted' });
+  } catch (error) {
+    console.error('Delete post error:', error);
+    res.status(500).json({ error: 'Failed to delete post' });
+  }
+});
+
+export default router;
+```
+
+### 3.7 User Routes
+
+Create `routes/user.js`:
+
+```javascript
+import express from 'express';
+import { db } from '../config/firebase.js';
+import admin from 'firebase-admin';
+import requireLogin from '../middleware/requireLogin.js';
+
+const router = express.Router();
+
+// Get user profile
+router.get('/user/:id', requireLogin, async (req, res) => {
+  try {
+    const userDoc = await db.collection('users').doc(req.params.id).get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Get user's posts
+    const postsSnapshot = await db.collection('posts')
+      .where('postedBy', '==', req.params.id)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const posts = postsSnapshot.docs.map(doc => ({
+      _id: doc.id,
+      ...doc.data(),
+    }));
+
+    res.json({ user: { _id: userDoc.id, ...userDoc.data() }, posts });
+  } catch (error) {
+    console.error('Get user error:', error);
+    res.status(500).json({ error: 'Failed to fetch user' });
+  }
+});
+
+// Search users
+router.get('/search-users', requireLogin, async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) return res.json([]);
+
+    const snapshot = await db.collection('users').limit(50).get();
+    const users = snapshot.docs
+      .map(doc => ({ _id: doc.id, ...doc.data() }))
+      .filter(user => user.name.toLowerCase().includes(q.toLowerCase()))
+      .slice(0, 10);
+
+    res.json(users);
+  } catch (error) {
+    console.error('Search error:', error);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// Follow user
+router.put('/follow', requireLogin, async (req, res) => {
+  try {
+    const { followId } = req.body;
+    const currentUserId = req.user._id;
+
+    // Add to target's followers
+    await db.collection('users').doc(followId).update({
+      followers: admin.firestore.FieldValue.arrayUnion(currentUserId),
+    });
+
+    // Add to current user's following
+    await db.collection('users').doc(currentUserId).update({
+      following: admin.firestore.FieldValue.arrayUnion(followId),
+    });
+
+    res.json({ message: 'Followed successfully' });
+  } catch (error) {
+    console.error('Follow error:', error);
+    res.status(500).json({ error: 'Failed to follow user' });
+  }
+});
+
+// Unfollow user
+router.put('/unfollow', requireLogin, async (req, res) => {
+  try {
+    const { unfollowId } = req.body;
+    const currentUserId = req.user._id;
+
+    await db.collection('users').doc(unfollowId).update({
+      followers: admin.firestore.FieldValue.arrayRemove(currentUserId),
+    });
+
+    await db.collection('users').doc(currentUserId).update({
+      following: admin.firestore.FieldValue.arrayRemove(unfollowId),
+    });
+
+    res.json({ message: 'Unfollowed successfully' });
+  } catch (error) {
+    console.error('Unfollow error:', error);
+    res.status(500).json({ error: 'Failed to unfollow user' });
+  }
+});
+
+// Update profile
+router.put('/update-profile', requireLogin, async (req, res) => {
+  try {
+    const { name, bio } = req.body;
+
+    await db.collection('users').doc(req.user._id).update({
+      name,
+      bio,
+    });
+
+    const updatedDoc = await db.collection('users').doc(req.user._id).get();
+    res.json({ user: { _id: updatedDoc.id, ...updatedDoc.data() } });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
+});
+
+export default router;
+```
+
+---
+
+## Part 4: Frontend Development
+
+### 4.1 Create React App with Vite
+
+```bash
+cd nulltagram
+pnpm create vite ntagram --template react
+cd ntagram
+pnpm install
+```
+
+### 4.2 Install Frontend Dependencies
+
+```bash
+pnpm add firebase react-router-dom lucide-react materialize-css
+pnpm add -D vitest @testing-library/react @testing-library/jest-dom
+```
+
+### 4.3 Firebase Client Configuration
+
+Create `src/config/firebase.js`:
+
+```javascript
+import { initializeApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import { getStorage } from 'firebase/storage';
+
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+};
+
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const storage = getStorage(app);
+export const googleProvider = new GoogleAuthProvider();
+```
+
+Create `src/config/api.js`:
+
+```javascript
+export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
+```
+
+### 4.4 User State Management
+
+Create `src/reducers/userReducer.js`:
+
+```javascript
+export const initialState = null;
+
+export const reducer = (state, action) => {
+  switch (action.type) {
+    case 'USER':
+      return action.payload;
+    case 'CLEAR':
+      return null;
+    case 'UPDATE':
+      return {
+        ...state,
+        followers: action.payload.followers,
+        following: action.payload.following,
+      };
+    case 'UPDATEPROFILEIMAGE':
+      return { ...state, image: action.payload };
+    default:
+      return state;
+  }
+};
+```
+
+### 4.5 Main App Component
+
+Create `src/App.jsx`:
+
+```jsx
+import { createContext, useReducer, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { reducer, initialState } from './reducers/userReducer';
+
+import Navbar from './components/Navbar';
+import Home from './components/screens/Home';
+import Signin from './components/screens/Signin';
+import Signup from './components/screens/Signup';
+import Profile from './components/screens/Profile';
+import UserProfile from './components/screens/UserProfile';
+import CreatePost from './components/screens/CreatePost';
+import PostDetail from './components/screens/PostDetail';
+import Explore from './components/screens/Explore';
+
+import 'materialize-css/dist/css/materialize.min.css';
+import './App.css';
+
+export const UserContext = createContext();
+
+function App() {
+  const [state, dispatch] = useReducer(reducer, initialState);
+
+  useEffect(() => {
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (user) {
+      dispatch({ type: 'USER', payload: user });
+    }
+  }, []);
+
+  return (
+    <UserContext.Provider value={{ state, dispatch }}>
+      <BrowserRouter>
+        <Navbar />
+        <div className="container">
+          <Routes>
+            <Route path="/" element={state ? <Home /> : <Navigate to="/signin" />} />
+            <Route path="/signin" element={<Signin />} />
+            <Route path="/signup" element={<Signup />} />
+            <Route path="/profile" element={state ? <Profile /> : <Navigate to="/signin" />} />
+            <Route path="/profile/:id" element={state ? <UserProfile /> : <Navigate to="/signin" />} />
+            <Route path="/create" element={state ? <CreatePost /> : <Navigate to="/signin" />} />
+            <Route path="/post/:id" element={state ? <PostDetail /> : <Navigate to="/signin" />} />
+            <Route path="/explore" element={state ? <Explore /> : <Navigate to="/signin" />} />
+          </Routes>
+        </div>
+      </BrowserRouter>
+    </UserContext.Provider>
+  );
+}
+
+export default App;
+```
+
+### 4.6 Image Compression Utility
+
+Create `src/utils/imageCompression.js`:
+
+```javascript
+export const compressImage = (file, maxWidth = 1080, maxHeight = 1080, quality = 0.85) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      const img = new Image();
+
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let { width, height } = img;
+
+        // Calculate new dimensions maintaining aspect ratio
+        if (width > height) {
+          if (width > maxWidth) {
+            height = (height * maxWidth) / width;
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width = (width * maxHeight) / height;
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              resolve(new File([blob], file.name, { type: 'image/jpeg' }));
+            } else {
+              reject(new Error('Compression failed'));
+            }
+          },
+          'image/jpeg',
+          quality
+        );
+      };
+
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = e.target.result;
+    };
+
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+};
+
+export const formatFileSize = (bytes) => {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+};
+```
+
+### 4.7 Sign In Component
+
+Create `src/components/screens/Signin.jsx`:
+
+```jsx
+import { useState, useContext } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
+import { auth, googleProvider } from '../../config/firebase';
+import { API_URL } from '../../config/api';
+import { UserContext } from '../../App';
+import M from 'materialize-css';
+
+const Signin = () => {
+  const { dispatch } = useContext(UserContext);
+  const navigate = useNavigate();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const fetchProfile = async (token) => {
+    const res = await fetch(`${API_URL}/get-profile`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return res.json();
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const token = await userCredential.user.getIdToken();
+      const userData = await fetchProfile(token);
+
+      localStorage.setItem('user', JSON.stringify(userData));
+      localStorage.setItem('token', token);
+      dispatch({ type: 'USER', payload: userData });
+
+      M.toast({ html: 'Welcome back!', classes: 'green' });
+      navigate('/');
+    } catch (error) {
+      M.toast({ html: error.message, classes: 'red' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const token = await result.user.getIdToken();
+
+      let userData;
+      try {
+        userData = await fetchProfile(token);
+      } catch {
+        // New user - create profile
+        const res = await fetch(`${API_URL}/create-profile`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            name: result.user.displayName,
+            email: result.user.email,
+            image: result.user.photoURL,
+          }),
+        });
+        userData = (await res.json()).user;
+      }
+
+      localStorage.setItem('user', JSON.stringify(userData));
+      localStorage.setItem('token', token);
+      dispatch({ type: 'USER', payload: userData });
+      navigate('/');
+    } catch (error) {
+      M.toast({ html: error.message, classes: 'red' });
+    }
+  };
+
+  return (
+    <div className="card auth-card">
+      <h2>Sign In</h2>
+      <form onSubmit={handleSubmit}>
+        <input
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+        />
+        <input
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+        />
+        <button
+          type="submit"
+          className="btn waves-effect waves-light"
+          disabled={loading}
+        >
+          {loading ? 'Signing in...' : 'Sign In'}
+        </button>
+      </form>
+
+      <div className="divider" style={{ margin: '20px 0' }} />
+
+      <button
+        className="btn waves-effect waves-light red"
+        onClick={handleGoogleSignIn}
+      >
+        Sign in with Google
+      </button>
+
+      <p style={{ marginTop: '20px' }}>
+        Don't have an account? <Link to="/signup">Sign up</Link>
+      </p>
+    </div>
+  );
+};
+
+export default Signin;
+```
+
+### 4.8 Create Post Component
+
+Create `src/components/screens/CreatePost.jsx`:
+
+```jsx
+import { useState, useContext } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from '../../config/firebase';
+import { API_URL } from '../../config/api';
+import { compressImage, formatFileSize } from '../../utils/imageCompression';
+import M from 'materialize-css';
+
+const CreatePost = () => {
+  const navigate = useNavigate();
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [image, setImage] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [compressionInfo, setCompressionInfo] = useState(null);
+
+  const handleImageChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+      const originalSize = file.size;
+      const compressed = await compressImage(file);
+
+      setImage(compressed);
+      setPreview(URL.createObjectURL(compressed));
+      setCompressionInfo({
+        original: formatFileSize(originalSize),
+        compressed: formatFileSize(compressed.size),
+        saved: Math.round((1 - compressed.size / originalSize) * 100),
+      });
+    } catch (error) {
+      M.toast({ html: 'Failed to process image', classes: 'red' });
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!image) {
+      M.toast({ html: 'Please select an image', classes: 'red' });
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      // Upload to Firebase Storage
+      const storageRef = ref(storage, `posts/${Date.now()}_${image.name}`);
+      await uploadBytes(storageRef, image);
+      const url = await getDownloadURL(storageRef);
+
+      // Create post via API
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_URL}/createpost`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ title, body, url }),
+      });
+
+      if (!res.ok) throw new Error('Failed to create post');
+
+      M.toast({ html: 'Post created!', classes: 'green' });
+      navigate('/');
+    } catch (error) {
+      M.toast({ html: error.message, classes: 'red' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="card create-post-card">
+      <h4>Create New Post</h4>
+
+      <form onSubmit={handleSubmit}>
+        <div className="file-field input-field">
+          <div className="btn">
+            <span>Image</span>
+            <input type="file" accept="image/*" onChange={handleImageChange} />
+          </div>
+          <div className="file-path-wrapper">
+            <input className="file-path" type="text" placeholder="Select an image" />
+          </div>
+        </div>
+
+        {preview && (
+          <div className="preview-container">
+            <img src={preview} alt="Preview" style={{ maxWidth: '100%', maxHeight: '300px' }} />
+            {compressionInfo && (
+              <p className="compression-info">
+                {compressionInfo.original} → {compressionInfo.compressed}
+                ({compressionInfo.saved}% saved)
+              </p>
+            )}
+          </div>
+        )}
+
+        <input
+          type="text"
+          placeholder="Title"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          required
+        />
+
+        <textarea
+          placeholder="Caption (optional)"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          className="materialize-textarea"
+        />
+
+        <button
+          type="submit"
+          className="btn waves-effect waves-light"
+          disabled={loading || !image}
+        >
+          {loading ? 'Posting...' : 'Post'}
+        </button>
+      </form>
+    </div>
+  );
+};
+
+export default CreatePost;
+```
+
+### 4.9 Home Feed with Infinite Scroll
+
+Create `src/components/screens/Home.jsx`:
+
+```jsx
+import { useState, useEffect, useRef, useContext, useCallback } from 'react';
+import { Link } from 'react-router-dom';
+import { Heart, MessageCircle, Trash2 } from 'lucide-react';
+import { API_URL } from '../../config/api';
+import { UserContext } from '../../App';
+import M from 'materialize-css';
+
+const Home = () => {
+  const { state: currentUser } = useContext(UserContext);
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [cursor, setCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(true);
+  const observerRef = useRef();
+
+  const token = localStorage.getItem('token');
+
+  const fetchPosts = useCallback(async (cursorParam = null) => {
+    try {
+      const url = cursorParam
+        ? `${API_URL}/allposts?limit=10&cursor=${cursorParam}`
+        : `${API_URL}/allposts?limit=10`;
+
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+
+      if (cursorParam) {
+        setPosts((prev) => [...prev, ...data.posts]);
+      } else {
+        setPosts(data.posts);
+      }
+
+      setCursor(data.nextCursor);
+      setHasMore(data.hasMore);
+    } catch (error) {
+      M.toast({ html: 'Failed to load posts', classes: 'red' });
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    fetchPosts();
+  }, [fetchPosts]);
+
+  // Infinite scroll observer
+  const lastPostRef = useCallback(
+    (node) => {
+      if (loadingMore) return;
+      if (observerRef.current) observerRef.current.disconnect();
+
+      observerRef.current = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting && hasMore) {
+          setLoadingMore(true);
+          fetchPosts(cursor);
+        }
+      });
+
+      if (node) observerRef.current.observe(node);
+    },
+    [loadingMore, hasMore, cursor, fetchPosts]
+  );
+
+  const handleLike = async (postId) => {
+    const post = posts.find((p) => p._id === postId);
+    const isLiked = post.likes.includes(currentUser._id);
+    const endpoint = isLiked ? 'removelike' : 'givelike';
+
+    // Optimistic update
+    setPosts((prev) =>
+      prev.map((p) =>
+        p._id === postId
+          ? {
+              ...p,
+              likes: isLiked
+                ? p.likes.filter((id) => id !== currentUser._id)
+                : [...p.likes, currentUser._id],
+            }
+          : p
+      )
+    );
+
+    try {
+      await fetch(`${API_URL}/${endpoint}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ postId }),
+      });
+    } catch (error) {
+      // Revert on error
+      fetchPosts();
+    }
+  };
+
+  const handleDelete = async (postId) => {
+    if (!window.confirm('Delete this post?')) return;
+
+    try {
+      await fetch(`${API_URL}/delete-post/${postId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      setPosts((prev) => prev.filter((p) => p._id !== postId));
+      M.toast({ html: 'Post deleted', classes: 'green' });
+    } catch (error) {
+      M.toast({ html: 'Failed to delete', classes: 'red' });
+    }
+  };
+
+  if (loading) {
+    return <div className="center-align"><div className="preloader-wrapper active">...</div></div>;
+  }
+
+  return (
+    <div className="home">
+      {posts.map((post, index) => (
+        <div
+          key={post._id}
+          className="card post-card"
+          ref={index === posts.length - 1 ? lastPostRef : null}
+        >
+          <div className="card-header">
+            <Link to={`/profile/${post.postedBy._id}`}>
+              <img
+                src={post.postedBy.image || '/default-avatar.png'}
+                alt=""
+                className="avatar"
+              />
+              <span>{post.postedBy.name}</span>
+            </Link>
+            {post.postedBy._id === currentUser._id && (
+              <Trash2
+                className="delete-icon"
+                onClick={() => handleDelete(post._id)}
+              />
+            )}
+          </div>
+
+          <div className="card-image">
+            <img src={post.picture} alt={post.title} />
+          </div>
+
+          <div className="card-content">
+            <div className="actions">
+              <Heart
+                className={post.likes.includes(currentUser._id) ? 'liked' : ''}
+                onClick={() => handleLike(post._id)}
+              />
+              <Link to={`/post/${post._id}`}>
+                <MessageCircle />
+              </Link>
+            </div>
+
+            <p className="likes">{post.likes.length} likes</p>
+
+            <p>
+              <strong>{post.postedBy.name}</strong> {post.title}
+            </p>
+
+            {post.body && <p className="body">{post.body}</p>}
+
+            {post.comments.length > 0 && (
+              <Link to={`/post/${post._id}`} className="view-comments">
+                View all {post.comments.length} comments
+              </Link>
+            )}
+          </div>
+        </div>
+      ))}
+
+      {loadingMore && <div className="center-align">Loading more...</div>}
+      {!hasMore && posts.length > 0 && (
+        <p className="center-align">You've reached the end!</p>
+      )}
+    </div>
+  );
+};
+
+export default Home;
+```
+
+### 4.10 Environment Variables
+
+Create `ntagram/.env`:
+
+```env
+VITE_API_URL=http://localhost:5001
+VITE_FIREBASE_API_KEY=your_api_key
+VITE_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=your_project_id
+VITE_FIREBASE_STORAGE_BUCKET=your_project.appspot.com
+VITE_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
+VITE_FIREBASE_APP_ID=your_app_id
+```
+
+---
+
+## Part 5: Docker Deployment
+
+### 5.1 Backend Dockerfile
+
+Create `Dockerfile.backend`:
+
+```dockerfile
+FROM node:20-alpine
+
+RUN npm install -g pnpm
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --prod
+
+COPY app.js ./
+COPY config ./config
+COPY middleware ./middleware
+COPY routes ./routes
+
+EXPOSE 5001
+
+CMD ["node", "app.js"]
+```
+
+### 5.2 Frontend Dockerfile
+
+Create `Dockerfile.frontend`:
+
+```dockerfile
+# Build stage
+FROM node:20-alpine AS builder
+
+RUN npm install -g pnpm
+
+WORKDIR /app
+
+COPY ntagram/package.json ntagram/pnpm-lock.yaml ./
+RUN pnpm install
+
+COPY ntagram/ ./
+
+ARG VITE_API_URL
+ARG VITE_FIREBASE_API_KEY
+ARG VITE_FIREBASE_AUTH_DOMAIN
+ARG VITE_FIREBASE_PROJECT_ID
+ARG VITE_FIREBASE_STORAGE_BUCKET
+ARG VITE_FIREBASE_MESSAGING_SENDER_ID
+ARG VITE_FIREBASE_APP_ID
+
+RUN pnpm build
+
+# Production stage
+FROM nginx:alpine
+
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+### 5.3 Nginx Configuration
+
+Create `nginx.conf`:
+
+```nginx
+server {
+    listen 80;
+    server_name localhost;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # SPA routing
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # API proxy
+    location /docs {
+        proxy_pass http://backend:5001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location /openapi.json {
+        proxy_pass http://backend:5001;
+    }
+
+    # Gzip
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript;
+}
+```
+
+### 5.4 Docker Compose
+
+Create `docker-compose.yml`:
+
+```yaml
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      - PORT=5001
+      - FIREBASE_SERVICE_ACCOUNT=${FIREBASE_SERVICE_ACCOUNT}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        - VITE_API_URL=${VITE_API_URL}
+        - VITE_FIREBASE_API_KEY=${VITE_FIREBASE_API_KEY}
+        - VITE_FIREBASE_AUTH_DOMAIN=${VITE_FIREBASE_AUTH_DOMAIN}
+        - VITE_FIREBASE_PROJECT_ID=${VITE_FIREBASE_PROJECT_ID}
+        - VITE_FIREBASE_STORAGE_BUCKET=${VITE_FIREBASE_STORAGE_BUCKET}
+        - VITE_FIREBASE_MESSAGING_SENDER_ID=${VITE_FIREBASE_MESSAGING_SENDER_ID}
+        - VITE_FIREBASE_APP_ID=${VITE_FIREBASE_APP_ID}
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+```
+
+### 5.5 Deploy
+
+```bash
+# Build and run
+docker compose up --build
+
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
+```
+
+---
+
+## Part 6: Database Schema Reference
+
+### Users Collection
+
+```javascript
+{
+  _id: string,              // Firebase UID
+  name: string,
+  email: string,
+  image: string | null,     // Avatar URL
+  bio: string | null,
+  followers: string[],      // User IDs
+  following: string[],      // User IDs
+  createdAt: string         // ISO timestamp
+}
+```
+
+### Posts Collection
+
+```javascript
+{
+  _id: string,              // Auto-generated
+  title: string,
+  body: string,             // Caption
+  picture: string,          // Image URL
+  postedBy: string,         // User ID
+  likes: string[],          // User IDs
+  comments: [
+    {
+      text: string,
+      postedBy: string,     // User ID
+      createdAt: string
+    }
+  ],
+  createdAt: string
+}
+```
+
+### Firestore Indexes
+
+Create these indexes in Firebase Console for optimal queries:
+
+1. `posts` collection: `postedBy` (ASC) + `createdAt` (DESC)
+2. `posts` collection: `createdAt` (DESC)
+
+---
+
+## Summary
+
+Congratulations! You've built a full-stack Instagram clone with:
+
+- **Authentication**: Email/password and Google OAuth
+- **Image uploads**: Client-side compression + Firebase Storage
+- **Social features**: Posts, likes, comments, follow/unfollow
+- **Infinite scroll**: Cursor-based pagination with Intersection Observer
+- **Docker deployment**: Production-ready containerization
+
+### Key Takeaways
+
+1. **Firebase** provides authentication, database, and storage in one platform
+2. **Client-side image compression** reduces storage costs and upload times
+3. **Cursor-based pagination** is more efficient than offset pagination for infinite scroll
+4. **Optimistic updates** improve perceived performance
+5. **Docker Compose** simplifies multi-container deployment
+
+### Next Steps
+
+- Add push notifications with Firebase Cloud Messaging
+- Implement stories feature
+- Add direct messaging
+- Implement image filters
+- Add hashtag support and trending topics
+
+---
+
+## Original Project Overview
+
+### Features
 
 - **User Authentication**: Email/password signup and Google OAuth via Firebase Auth
 - **Photo Sharing**: Upload and share images with captions using Firebase Storage
@@ -19,81 +1507,44 @@ Nulltagram is a full-stack Instagram clone - a social media platform that enable
 - **News Feed**: Paginated feed with posts from followed users
 - **API Documentation**: Interactive OpenAPI 3.0 docs at `/docs`
 
-## Tech Stack
+### Tech Stack
 
-### Frontend
-- **React 18** with Vite for fast development
-- **React Router v6** for client-side routing
-- **Firebase SDK** for authentication and data management
-- **Materialize CSS** for responsive UI
-- **Lucide React** for icons
+**Frontend**: React 18, Vite, React Router v6, Firebase SDK, Materialize CSS, Lucide React
 
-### Backend
-- **Node.js 20+** with Express.js
-- **Firebase Admin SDK** for server-side operations
-- **Cloud Firestore** as NoSQL database
-- **Firebase Storage** for image hosting
-- **Scalar Express API Reference** for interactive documentation
+**Backend**: Node.js 20+, Express.js, Firebase Admin SDK, Cloud Firestore, Firebase Storage, Scalar API Reference
 
-### DevOps
-- **Docker** and Docker Compose for containerization
-- **nginx** as reverse proxy for production
-- **pnpm** with workspace support for monorepo management
+**DevOps**: Docker, Docker Compose, nginx, pnpm workspaces
 
-## Architecture
+### API Endpoints
 
-```
-Frontend (React + Vite)  <-- HTTP/JSON -->  Backend (Express.js)
-     ↓                                            ↓
-  Firebase Auth SDK                      Firebase Admin SDK
-                                               ↓
-                                    Cloud Firestore + Storage
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/create-profile` | Create user profile |
+| GET | `/get-profile` | Get current user |
+| GET | `/allposts` | Get paginated feed |
+| POST | `/createpost` | Create new post |
+| PUT | `/givelike` | Like a post |
+| PUT | `/removelike` | Unlike a post |
+| PUT | `/insert-comment` | Add comment |
+| DELETE | `/delete-post/:id` | Delete post |
+| GET | `/user/:id` | Get user profile |
+| GET | `/search-users` | Search users |
+| PUT | `/follow` | Follow user |
+| PUT | `/unfollow` | Unfollow user |
+| PUT | `/update-profile` | Update profile |
 
-The project uses a two-tier architecture with containerized deployment:
-- **Frontend Container**: nginx serving React build with API proxying
-- **Backend Container**: Node.js Express server
-- Both containers communicate via Docker network bridge
-
-## API Endpoints
-
-The RESTful API includes 16+ endpoints:
-
-- **Authentication**: `/signup`, `/signin`
-- **Posts**: `/allposts`, `/post/:id`, `/createpost`, `/delete-post/:id`, `/mypost`
-- **Interactions**: `/givelike`, `/removelike`, `/insert-comment`, `/delete-comment/:id`
-- **Users**: `/user/:id`, `/search-users`, `/follow`, `/unfollow`, `/update-profile`
-
-## Getting Started
-
-Clone the repository and install dependencies:
+### Quick Start
 
 ```bash
-git clone https://github.com/yourusername/nulltagram
+# Clone and install
+git clone https://github.com/fredhii/nulltagram
 cd nulltagram
 pnpm install
-```
 
-Run the development servers:
+# Development
+pnpm dev                  # Backend (port 5001)
+cd ntagram && pnpm dev    # Frontend (port 3000)
 
-```bash
-# Backend
-pnpm dev
-
-# Frontend (in another terminal)
-cd ntagram && pnpm dev
-```
-
-Or use Docker for production deployment:
-
-```bash
+# Production with Docker
 docker compose up --build
 ```
-
-## Notable Aspects
-
-- **Monorepo Structure**: Uses pnpm workspaces for efficient dependency management
-- **Interactive API Docs**: OpenAPI 3.0 specification with Scalar UI
-- **JWT Authentication**: Middleware-based token verification on protected routes
-- **Production Ready**: Full Docker containerization with nginx reverse proxy
-- **Comprehensive Testing**: Vitest and React Testing Library for frontend tests
