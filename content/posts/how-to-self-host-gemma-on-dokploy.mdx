@@ -1,0 +1,380 @@
+---
+title: 'How to Self-Host Gemma on Dokploy (The Right Way)'
+summary: 'A production-ready guide to self-hosting Google Gemma AI model on Dokploy using Ollama. Includes proper Traefik networking, persistent storage, concurrency settings, and hardware recommendations.'
+image: '/images/posts/how-to-self-host-gemma-on-dokploy.webp'
+author: 'Fredy Acuna'
+publishedAt: '2025-12-08'
+---
+
+### Self-Host Gemma on Dokploy: A Production-Ready Guide
+
+This guide shows you how to properly self-host Google's Gemma AI model on [Dokploy](https://dokploy.com) using Ollama. I've corrected several issues from [an existing tutorial](https://tariyekorogha.medium.com/i-crashed-out-while-self-hosting-gemma-as-a-service-on-dokploy-so-you-wont-have-to-0d05a38df7f1) to make this production-ready with proper networking, persistent storage, and concurrency handling.
+
+---
+
+### What You'll Learn
+
+- Setting up Gemma with proper Traefik networking (no exposed ports)
+- Configuring persistent storage for models
+- Hardware requirements for production
+- Concurrency settings for multiple users
+- Testing your deployment with curl
+
+---
+
+### Prerequisites
+
+Before starting, ensure you have:
+
+- A [Dokploy](https://dokploy.com) instance running (check out [How to Install Coolify](/posts/how-to-install-coolify) for similar self-hosting setup)
+- A VPS with at least **1 vCPU**, **1 GB RAM**, and **5 GB storage** (minimum for development/testing)
+
+---
+
+### Understanding Gemma and Ollama
+
+**Gemma** is Google's open-source AI model family. **Ollama** is a tool that makes running AI models locally simple—it handles downloading, serving, and API endpoints automatically.
+
+When you run `ollama serve`, it starts an HTTP server on port `11434` that accepts requests and returns AI-generated responses. This is what we'll deploy.
+
+---
+
+### Hardware Requirements
+
+The `gemma3:270m` model is lightweight (~270MB), so it runs on minimal hardware. Choose your setup based on your use case:
+
+#### Development/Testing (Survival Mode)
+
+Use this for personal projects or cheap VPS instances:
+
+| Resource | Specification |
+|----------|---------------|
+| **CPU** | 1 vCPU |
+| **RAM** | 1 GB |
+| **Storage** | 5 GB |
+| **GPU** | Not required |
+
+> **Note:** This handles 1 user quickly. If 2 people query at the same time, the second waits a few seconds.
+
+#### Production (Frequent Use)
+
+Use this if you expect 5-10 concurrent users or automated bots querying frequently:
+
+| Resource | Specification |
+|----------|---------------|
+| **CPU** | 2 vCPUs |
+| **RAM** | 2-4 GB |
+| **Storage** | 5-10 GB |
+| **GPU** | Not required |
+
+> **Why more RAM?** Long conversations grow the context window (memory of previous messages), which can spike memory usage. 2GB is the safety zone.
+
+> **Why 2 vCPUs?** The HTTP server handling JSON requests and the inference engine compete for CPU. 2 cores keep the API responsive while the model thinks.
+
+If you want better quality responses, consider larger models like `gemma:2b` (1.7GB) or `gemma:7b` (requires more RAM/GPU).
+
+---
+
+### Step 1: Create the Service in Dokploy
+
+1. Log in to your Dokploy dashboard
+2. Click **Create Service** → Select **Compose**
+3. Give it a name like `gemma-service`
+
+---
+
+### Step 2: Configure Docker Compose
+
+Go to the **General** tab, then click **Raw**. Paste the following configuration:
+
+```yaml
+version: '3.8'
+services:
+  gemma:
+    image: ollama/ollama:latest
+    container_name: gemma-inference
+    restart: unless-stopped
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_MODELS=gemma3:270m
+      - OLLAMA_ORIGINS=*
+      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_MAX_LOADED_MODELS=1
+    networks:
+      - dokploy-network
+    volumes:
+      - ollama_storage:/root/.ollama
+    # Uncomment if you have GPU available:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  ollama_storage:
+
+networks:
+  dokploy-network:
+    external: true
+```
+
+Click **Save**.
+
+---
+
+### Key Configuration Explained
+
+Let's break down what makes this configuration production-ready:
+
+#### Networking
+
+```yaml
+networks:
+  - dokploy-network
+```
+
+Instead of exposing port `11434` directly, we connect to Dokploy's internal Traefik network. This allows you to:
+
+- Use a proper domain with HTTPS
+- Keep the service internal (more secure)
+- Let Traefik handle SSL termination
+
+#### Persistent Storage
+
+```yaml
+volumes:
+  - ollama_storage:/root/.ollama
+```
+
+Without this, **you'd lose downloaded models every time the container restarts**. The original tutorial missed this—meaning you'd have to re-download the model after every deployment.
+
+#### Concurrency Settings
+
+```yaml
+- OLLAMA_NUM_PARALLEL=4
+- OLLAMA_MAX_LOADED_MODELS=1
+```
+
+| Variable | Purpose |
+|----------|---------|
+| `OLLAMA_NUM_PARALLEL=4` | Allows 4 concurrent requests (4 users at the same time) |
+| `OLLAMA_MAX_LOADED_MODELS=1` | Keeps only 1 model in memory (saves RAM) |
+
+#### CORS Configuration
+
+```yaml
+- OLLAMA_ORIGINS=*
+```
+
+Allows requests from any origin. Useful if you're calling the API from a frontend application.
+
+---
+
+### Step 3: Configure the Domain
+
+1. After saving, go to the **Domains** tab in your service
+2. Click **Add Domain**
+3. For the **Host** field, choose one of these options:
+
+**Option A: Generate a traefik.me URL (Recommended for Testing)**
+
+Click the **Generate** button in Dokploy. It will automatically create a URL like:
+
+```
+main-ollama-wv9tts-9dc2f9-209-112-91-61.traefik.me
+```
+
+This gives you instant HTTPS without any DNS configuration.
+
+**Option B: Use Your Own Domain**
+
+Enter your subdomain: `gemma.yourdomain.com`
+
+Make sure you have a DNS A record pointing to your Dokploy server's IP.
+
+4. Set the **Container Port** to `11434` (this is the port Ollama exposes internally)
+5. Leave **Path** as `/`
+6. Enable **HTTPS** for SSL (automatic with traefik.me or your own domain with Let's Encrypt)
+7. Click **Save**
+
+---
+
+### Step 4: Deploy and Download the Model
+
+1. Click **Deploy** to start the container
+2. Wait for the deployment to complete (check the logs)
+
+Now, here's the critical step the original tutorial got right—**you must download the model manually**:
+
+3. Go to **Docker** in the Dokploy sidebar
+4. Find the `gemma-inference` container
+5. Click the three dots → **Terminal**
+6. Run the following command:
+
+```bash
+ollama pull gemma3:270m
+```
+
+Wait for the download to complete. You can verify it worked with:
+
+```bash
+ollama list
+```
+
+You should see:
+
+```
+NAME           ID          SIZE     MODIFIED
+gemma3:270m    abc123...   270MB    2 minutes ago
+```
+
+---
+
+### Step 5: Test Your Deployment
+
+Visit your domain in a browser. You should see:
+
+```
+Ollama is running
+```
+
+Now test the API with curl:
+
+```bash
+curl https://gemma.yourdomain.com/api/generate -d '{
+  "model": "gemma3:270m",
+  "prompt": "Why is the sky blue?",
+  "stream": false
+}'
+```
+
+You should receive a JSON response with the AI-generated answer.
+
+---
+
+### API Usage Examples
+
+#### Basic Generation
+
+```bash
+curl -X POST https://gemma.yourdomain.com/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemma3:270m",
+    "prompt": "Explain Docker in one sentence.",
+    "stream": false
+  }'
+```
+
+#### With Temperature Control
+
+```bash
+curl -X POST https://gemma.yourdomain.com/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemma3:270m",
+    "prompt": "Write a haiku about programming.",
+    "stream": false,
+    "options": {
+      "temperature": 0.7,
+      "num_predict": 50
+    }
+  }'
+```
+
+#### Chat Format
+
+```bash
+curl -X POST https://gemma.yourdomain.com/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemma3:270m",
+    "messages": [
+      {"role": "user", "content": "What is machine learning?"}
+    ],
+    "stream": false
+  }'
+```
+
+---
+
+### Troubleshooting
+
+#### Model Not Found Error
+
+If you get `model not found`, you forgot to download it. SSH into the container and run:
+
+```bash
+ollama pull gemma3:270m
+```
+
+#### Container Keeps Restarting
+
+Check the logs in Dokploy. Common causes:
+
+- **Out of memory**: Increase RAM or use a smaller model
+- **Volume permissions**: The ollama_storage volume may have permission issues
+
+#### Slow Responses
+
+- For single-user use, 1 vCPU and 1 GB RAM is sufficient
+- For concurrent users, upgrade to 2 vCPUs and 2-4 GB RAM
+- Reduce `OLLAMA_NUM_PARALLEL` if RAM is limited (try `OLLAMA_NUM_PARALLEL=1` or `2`)
+- Consider using a GPU for larger models
+
+#### Cannot Access Domain
+
+- Verify the `dokploy-network` is external and exists
+- Check that port `11434` is set as the container port in Domains
+- Ensure Traefik is running properly
+
+---
+
+### Upgrading to Larger Models
+
+Once your setup is working, you can easily switch models:
+
+```bash
+# Inside the container terminal
+ollama pull gemma:2b      # 1.7 GB, better quality
+ollama pull gemma:7b      # 4.2 GB, requires more RAM
+ollama pull llama3.2:3b   # Alternative model
+```
+
+Update your API calls to use the new model name.
+
+---
+
+### Security Considerations
+
+For production deployments:
+
+1. **Add authentication**: Consider placing an authentication proxy in front of Ollama
+2. **Rate limiting**: Use Traefik middleware to prevent abuse
+3. **Restrict CORS**: Change `OLLAMA_ORIGINS=*` to specific domains
+4. **Monitor usage**: Set up logging to track API calls
+
+---
+
+### Conclusion
+
+You now have a production-ready Gemma AI service running on Dokploy with:
+
+- Proper Traefik networking with HTTPS
+- Persistent model storage
+- Concurrent request handling
+- A clean API accessible via your domain
+
+This setup is significantly more robust than exposing ports directly and handles real-world usage patterns.
+
+---
+
+### Related Resources
+
+- [Ollama Documentation](https://ollama.com)
+- [Dokploy Documentation](https://docs.dokploy.com)
+- [Gemma Model Card](https://ai.google.dev/gemma)
+- [Traefik Documentation](https://doc.traefik.io/traefik/)
