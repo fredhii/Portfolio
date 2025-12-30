@@ -1,0 +1,413 @@
+---
+title: 'Cómo Instalar Gemma en Dokploy (La Forma Correcta)'
+summary: 'Guía completa para instalar el modelo de IA Gemma de Google en Dokploy usando Ollama. Incluye almacenamiento persistente, configuración de concurrencia, requisitos de hardware y Open WebUI opcional para una interfaz tipo ChatGPT.'
+image: '/images/posts/como-instalar-gemma-en-dokploy.webp'
+author: 'Fredy Acuna'
+publishedAt: '2025-12-08'
+---
+
+### Instala Gemma en Dokploy: Guía Lista para Producción
+
+Esta guía te muestra cómo instalar correctamente el modelo de IA Gemma de Google en [Dokploy](https://dokploy.com) usando Ollama. He corregido varios problemas de [un tutorial existente](https://tariyekorogha.medium.com/i-crashed-out-while-self-hosting-gemma-as-a-service-on-dokploy-so-you-wont-have-to-0d05a38df7f1) para hacerlo listo para producción con almacenamiento persistente y manejo de concurrencia.
+
+---
+
+### Lo Que Aprenderás
+
+- Configurar Gemma con networking Traefik adecuado (sin puertos expuestos)
+- Configurar almacenamiento persistente para modelos
+- Requisitos de hardware para producción
+- Configuración de concurrencia para múltiples usuarios
+- Agregar Open WebUI para una interfaz tipo ChatGPT (opcional)
+- Probar tu despliegue con curl
+
+---
+
+### Requisitos Previos
+
+Antes de comenzar, asegúrate de tener:
+
+- Una instancia de [Dokploy](https://dokploy.com) funcionando (revisa [Cómo Instalar Coolify](/posts/how-to-install-coolify) para una configuración similar)
+- Un VPS con al menos **1 vCPU**, **1 GB RAM** y **5 GB de almacenamiento** (mínimo para desarrollo/pruebas)
+
+---
+
+### Entendiendo Gemma y Ollama
+
+**Gemma** es la familia de modelos de IA de código abierto de Google. **Ollama** es una herramienta que hace simple ejecutar modelos de IA localmente—maneja la descarga, servicio y endpoints de API automáticamente.
+
+Cuando ejecutas `ollama serve`, inicia un servidor HTTP en el puerto `11434` que acepta solicitudes y devuelve respuestas generadas por IA. Esto es lo que desplegaremos.
+
+---
+
+### Requisitos de Hardware
+
+El modelo `gemma3:270m` es ligero (~270MB), así que funciona en hardware mínimo. Elige tu configuración según tu caso de uso:
+
+#### Desarrollo/Pruebas (Modo Supervivencia)
+
+Usa esto para proyectos personales o instancias VPS económicas:
+
+| Recurso | Especificación |
+|---------|----------------|
+| **CPU** | 1 vCPU |
+| **RAM** | 1 GB |
+| **Almacenamiento** | 5 GB |
+| **GPU** | No requerida |
+
+> **Nota:** Esto maneja 1 usuario rápidamente. Si 2 personas consultan al mismo tiempo, la segunda espera unos segundos.
+
+#### Producción (Uso Frecuente)
+
+Usa esto si esperas 5-10 usuarios concurrentes o bots automatizados consultando frecuentemente:
+
+| Recurso | Especificación |
+|---------|----------------|
+| **CPU** | 2 vCPUs |
+| **RAM** | 2-4 GB |
+| **Almacenamiento** | 5-10 GB |
+| **GPU** | No requerida |
+
+> **¿Por qué más RAM?** Las conversaciones largas aumentan la ventana de contexto (memoria de mensajes anteriores), lo que puede disparar el uso de memoria. 2GB es la zona segura.
+
+> **¿Por qué 2 vCPUs?** El servidor HTTP manejando solicitudes JSON y el motor de inferencia compiten por CPU. 2 núcleos mantienen la API responsiva mientras el modelo piensa.
+
+Si quieres respuestas de mejor calidad, considera modelos más grandes como `gemma:2b` (1.7GB) o `gemma:7b` (requiere más RAM/GPU).
+
+---
+
+### Paso 1: Crear el Servicio en Dokploy
+
+1. Inicia sesión en tu panel de Dokploy
+2. Haz clic en **Create Service** → Selecciona **Compose**
+3. Dale un nombre como `gemma-service`
+
+---
+
+### Paso 2: Configurar Docker Compose
+
+Ve a la pestaña **General**, luego haz clic en **Raw**. Pega la siguiente configuración:
+
+```yaml
+version: '3.8'
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_ORIGINS=*
+      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_MAX_LOADED_MODELS=1
+    volumes:
+      - ollama_storage:/root/.ollama
+    # Descomenta si tienes GPU disponible:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # Opcional: Interfaz web tipo ChatGPT
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    volumes:
+      - open-webui:/app/backend/data
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_SECRET_KEY=tu-clave-secreta-aqui
+    restart: unless-stopped
+
+volumes:
+  ollama_storage:
+  open-webui:
+```
+
+> **Importante:** No configuramos `OLLAMA_MODELS` como variable de entorno. Configurarlo cambia la ruta de almacenamiento y rompe la persistencia. En su lugar, descargamos modelos manualmente después del despliegue (Paso 4).
+
+Haz clic en **Save**.
+
+---
+
+### Configuración Explicada
+
+Desglosemos qué hace esta configuración lista para producción:
+
+#### Almacenamiento Persistente
+
+```yaml
+volumes:
+  - ollama_storage:/root/.ollama
+```
+
+Sin esto, **perderías los modelos descargados cada vez que el contenedor se reinicia**. El tutorial original omitió esto—lo que significa que tendrías que re-descargar el modelo después de cada despliegue.
+
+#### Configuración de Concurrencia
+
+```yaml
+- OLLAMA_NUM_PARALLEL=4
+- OLLAMA_MAX_LOADED_MODELS=1
+```
+
+| Variable | Propósito |
+|----------|-----------|
+| `OLLAMA_NUM_PARALLEL=4` | Permite 4 solicitudes concurrentes (4 usuarios al mismo tiempo) |
+| `OLLAMA_MAX_LOADED_MODELS=1` | Mantiene solo 1 modelo en memoria (ahorra RAM) |
+
+#### Configuración CORS
+
+```yaml
+- OLLAMA_ORIGINS=*
+```
+
+Permite solicitudes desde cualquier origen. Útil si estás llamando a la API desde una aplicación frontend.
+
+---
+
+### Paso 3: Configurar los Dominios
+
+Necesitas agregar dominios para los servicios que quieres exponer. Ve a la pestaña **Domains** en tu servicio.
+
+#### Dominio para API de Ollama (Requerido)
+
+1. Haz clic en **Add Domain**
+2. Selecciona **Service Name**: `ollama`
+3. Para el campo **Host**, elige una de estas opciones:
+
+**Opción A: Generar URL traefik.me (Recomendado para Pruebas)**
+
+Haz clic en el botón **Generate** en Dokploy. Creará automáticamente una URL como:
+
+```
+main-ollama-wv9tts-9dc2f9-209-112-91-61.traefik.me
+```
+
+Esto te da HTTPS instantáneo sin ninguna configuración DNS.
+
+**Opción B: Usar Tu Propio Dominio**
+
+Ingresa tu subdominio: `ollama.tudominio.com`
+
+Asegúrate de tener un registro DNS A apuntando a la IP de tu servidor Dokploy.
+
+4. Configura el **Container Port** a `11434` (este es el puerto que Ollama expone internamente)
+5. Deja **Path** como `/`
+6. Habilita **HTTPS** para SSL (automático con traefik.me o tu propio dominio con Let's Encrypt)
+7. Haz clic en **Save**
+
+#### Dominio para Open WebUI (Opcional)
+
+Si incluiste el servicio Open WebUI, agrega otro dominio para él:
+
+1. Haz clic en **Add Domain**
+2. Selecciona **Service Name**: `open-webui`
+3. Para el **Host**, genera una URL traefik.me o usa tu propio dominio (ej., `chat.tudominio.com`)
+4. Configura el **Container Port** a `8080`
+5. Habilita **HTTPS**
+6. Haz clic en **Save**
+
+---
+
+### Paso 4: Desplegar y Descargar el Modelo
+
+1. Haz clic en **Deploy** para iniciar los contenedores
+2. Espera a que el despliegue termine (revisa los logs)
+
+Ahora, aquí está el paso crítico—**debes descargar el modelo manualmente**:
+
+3. Ve a **Docker** en la barra lateral de Dokploy
+4. Encuentra el contenedor `ollama`
+5. Haz clic en los tres puntos → **Terminal**
+6. Ejecuta el siguiente comando:
+
+```bash
+ollama pull gemma3:270m
+```
+
+Espera a que la descarga termine. Puedes verificar que funcionó con:
+
+```bash
+ollama list
+```
+
+Deberías ver:
+
+```
+NAME           ID          SIZE     MODIFIED
+gemma3:270m    abc123...   270MB    2 minutes ago
+```
+
+---
+
+### Paso 5: Probar Tu Despliegue
+
+Visita tu dominio en un navegador. Deberías ver:
+
+```
+Ollama is running
+```
+
+Ahora prueba la API con curl:
+
+```bash
+curl https://ollama.tudominio.com/api/generate -d '{
+  "model": "gemma3:270m",
+  "prompt": "¿Por qué el cielo es azul?",
+  "stream": false
+}'
+```
+
+Deberías recibir una respuesta JSON con la respuesta generada por IA.
+
+---
+
+### Ejemplos de Uso de API
+
+#### Generación Básica
+
+```bash
+curl -X POST https://ollama.tudominio.com/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemma3:270m",
+    "prompt": "Explica Docker en una oración.",
+    "stream": false
+  }'
+```
+
+#### Con Control de Temperatura
+
+```bash
+curl -X POST https://ollama.tudominio.com/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemma3:270m",
+    "prompt": "Escribe un haiku sobre programación.",
+    "stream": false,
+    "options": {
+      "temperature": 0.7,
+      "num_predict": 50
+    }
+  }'
+```
+
+#### Formato Chat
+
+```bash
+curl -X POST https://ollama.tudominio.com/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemma3:270m",
+    "messages": [
+      {"role": "user", "content": "¿Qué es machine learning?"}
+    ],
+    "stream": false
+  }'
+```
+
+---
+
+### Usando Open WebUI (Opcional)
+
+Si incluiste Open WebUI en tu Docker Compose, ahora tienes una interfaz tipo ChatGPT para interactuar con tus modelos.
+
+1. Visita tu dominio de Open WebUI (ej., `https://chat.tudominio.com`)
+2. Crea una cuenta en la primera visita
+3. Selecciona `gemma3:270m` del menú desplegable de modelos
+4. Comienza a chatear
+
+Open WebUI proporciona:
+
+- **Historial de chat**: Tus conversaciones se guardan localmente
+- **Múltiples modelos**: Cambia entre cualquier modelo que hayas descargado
+- **Prompts de sistema**: Personaliza el comportamiento de la IA
+- **Subida de archivos**: Adjunta documentos para que la IA los analice
+- **Gestión de usuarios**: Crea cuentas para miembros del equipo
+
+> **Tip:** Puedes descargar modelos adicionales directamente desde la configuración de Open WebUI, o vía la terminal del contenedor Ollama.
+
+---
+
+### Solución de Problemas
+
+#### Error Modelo No Encontrado
+
+Si obtienes `model not found`, olvidaste descargarlo. Entra al contenedor y ejecuta:
+
+```bash
+ollama pull gemma3:270m
+```
+
+#### El Contenedor Sigue Reiniciándose
+
+Revisa los logs en Dokploy. Causas comunes:
+
+- **Sin memoria**: Aumenta la RAM o usa un modelo más pequeño
+- **Permisos de volumen**: El volumen ollama_storage puede tener problemas de permisos
+
+#### Respuestas Lentas
+
+- Para uso de un solo usuario, 1 vCPU y 1 GB RAM es suficiente
+- Para usuarios concurrentes, actualiza a 2 vCPUs y 2-4 GB RAM
+- Reduce `OLLAMA_NUM_PARALLEL` si la RAM es limitada (prueba `OLLAMA_NUM_PARALLEL=1` o `2`)
+- Considera usar una GPU para modelos más grandes
+
+#### No Se Puede Acceder al Dominio
+
+- Verifica que el **Container Port** correcto esté configurado en Domains (`11434` para Ollama, `8080` para Open WebUI)
+- Verifica que el **Service Name** coincida con el servicio en tu Docker Compose
+- Asegúrate de que Traefik esté funcionando correctamente en Dokploy
+
+---
+
+### Actualizando a Modelos Más Grandes
+
+Una vez que tu configuración esté funcionando, puedes cambiar modelos fácilmente:
+
+```bash
+# Dentro de la terminal del contenedor
+ollama pull gemma:2b      # 1.7 GB, mejor calidad
+ollama pull gemma:7b      # 4.2 GB, requiere más RAM
+ollama pull llama3.2:3b   # Modelo alternativo
+```
+
+Actualiza tus llamadas a la API para usar el nuevo nombre de modelo.
+
+---
+
+### Consideraciones de Seguridad
+
+Para despliegues en producción:
+
+1. **Cambia la clave secreta**: Reemplaza `tu-clave-secreta-aqui` con una cadena aleatoria fuerte para Open WebUI
+2. **Agrega autenticación a la API de Ollama**: Considera colocar un proxy de autenticación frente a Ollama si expones la API directamente
+3. **Limitación de velocidad**: Usa middleware de Traefik para prevenir abuso
+4. **Restringir CORS**: Cambia `OLLAMA_ORIGINS=*` a dominios específicos si no usas Open WebUI
+
+---
+
+### Conclusión
+
+Ahora tienes un servicio de IA Gemma listo para producción corriendo en Dokploy con:
+
+- Almacenamiento de modelos persistente que sobrevive reinicios
+- Manejo de solicitudes concurrentes para múltiples usuarios
+- Una API limpia accesible vía tu dominio
+- Interfaz tipo ChatGPT opcional con Open WebUI
+
+Esta configuración es significativamente más robusta que exponer puertos directamente y maneja patrones de uso del mundo real.
+
+---
+
+### Recursos Relacionados
+
+- [Documentación de Ollama](https://ollama.com)
+- [Documentación de Open WebUI](https://docs.openwebui.com)
+- [Documentación de Dokploy](https://docs.dokploy.com)
+- [Tarjeta del Modelo Gemma](https://ai.google.dev/gemma)
