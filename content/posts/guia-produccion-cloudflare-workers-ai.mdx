@@ -1,0 +1,680 @@
+---
+title: 'Cloudflare Workers AI: Guía Avanzada para Aplicaciones Reales'
+summary: 'Guía avanzada de Cloudflare Workers AI cubriendo pipelines RAG, moderación de contenido con Llama Guard, function calling, outputs estructurados, optimización de costos y procesamiento asíncrono con Queues.'
+image: '/images/posts/guia-produccion-cloudflare-workers-ai.webp'
+author: 'Fredy Acuna'
+publishedAt: '2025-12-08'
+---
+
+### Cloudflare Workers AI: Guía Lista para Producción
+
+**Cloudflare Workers AI ofrece inferencia GPU serverless en el edge**, permitiéndote agregar capacidades de IA—embeddings, moderación de contenido, sugerencias inteligentes—sin gestionar infraestructura. Esta guía va más allá de la documentación básica para cubrir patrones arquitectónicos reales, optimización de costos y problemas comunes en producción.
+
+---
+
+### Lo Que Aprenderás
+
+- Configurar Workers AI con la configuración moderna wrangler.jsonc
+- Construir un pipeline RAG con Vectorize para búsqueda semántica
+- Moderación de contenido con Llama Guard
+- Function calling para agentes inteligentes
+- Outputs JSON estructurados para respuestas API
+- Estrategias de optimización de costos que realmente funcionan
+- Procesamiento asíncrono con Queues
+- Chatbot con historial de conversación
+- Problemas comunes y tips de debugging
+
+---
+
+### Requisitos Previos
+
+- Una [cuenta de Cloudflare](https://dash.cloudflare.com/sign-up)
+- Node.js 18+ y pnpm/npm
+- Conocimiento básico de TypeScript
+- Familiaridad con APIs REST
+
+---
+
+### Configurando tu Proyecto Workers AI
+
+Los proyectos modernos de Workers usan **wrangler.jsonc** (JSON con comentarios)—Cloudflare ahora recomienda esto sobre TOML para proyectos nuevos:
+
+```jsonc
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mi-app-ai",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-12-01",
+
+  "ai": { "binding": "AI" },
+
+  "vectorize": [{
+    "binding": "TASK_INDEX",
+    "index_name": "tasks-vector-index"
+  }],
+
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "miapp",
+    "database_id": "<TU_DATABASE_ID>",
+    "migrations_dir": "migrations"
+  }],
+
+  "kv_namespaces": [{
+    "binding": "CACHE",
+    "id": "<TU_KV_ID>",
+    "preview_id": "<TU_PREVIEW_KV_ID>"
+  }],
+
+  "queues": {
+    "producers": [{ "binding": "EMBEDDING_QUEUE", "queue": "embedding-jobs" }],
+    "consumers": [{ "queue": "embedding-jobs", "max_batch_size": 10, "max_batch_timeout": 5 }]
+  },
+
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 }
+}
+```
+
+Interface TypeScript para tus bindings de entorno:
+
+```typescript
+export interface Env {
+  AI: Ai;
+  TASK_INDEX: Vectorize;
+  DB: D1Database;
+  CACHE: KVNamespace;
+  EMBEDDING_QUEUE: Queue;
+  API_KEY: string;
+}
+```
+
+> **Importante**: Nunca pongas secretos en tu archivo de configuración. Usa `npx wrangler secret put API_KEY` y guarda secretos de desarrollo local en `.dev.vars` (agregar a `.gitignore`).
+
+---
+
+### Eligiendo el Modelo Correcto
+
+Workers AI ofrece **50+ modelos**. Aquí hay un desglose estratégico:
+
+| Caso de Uso | Modelo Recomendado | Por Qué |
+|-------------|-------------------|---------|
+| Embeddings | `@cf/baai/bge-base-en-v1.5` | 768 dimensiones, excelente precisión/costo |
+| Moderación | `@cf/meta/llama-guard-3-8b` | Clasificador de seguridad dedicado |
+| Sugerencias rápidas | `@cf/meta/llama-3.2-3b-instruct` | Rápido, barato, suficiente |
+| Razonamiento complejo | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Mejor calidad, 2-4x velocidad con FP8 |
+| Tareas generales | `@cf/meta/llama-3.1-8b-instruct-awq` | INT4 cuantizado—75% reducción de memoria |
+
+**Costo por millón de tokens:**
+
+| Modelo | Entrada | Salida | Velocidad |
+|--------|---------|--------|-----------|
+| llama-3.2-1b-instruct | $0.027 | $0.201 | Más rápido |
+| llama-3.2-3b-instruct | $0.051 | $0.335 | Rápido |
+| llama-3.1-8b-instruct-fp8-fast | $0.045 | $0.384 | Medio |
+| llama-3.3-70b-instruct-fp8-fast | $0.293 | $2.253 | Más lento |
+
+El tier gratuito te da **10,000 Neurons/día**—aproximadamente 1,300 respuestas de modelos pequeños o 10,000+ embeddings.
+
+---
+
+### Construyendo un Pipeline RAG para Búsqueda Semántica
+
+Este patrón permite búsqueda semántica—los usuarios pueden encontrar items incluso usando palabras diferentes:
+
+```typescript
+import { Hono } from "hono";
+
+const app = new Hono<{ Bindings: Env }>();
+
+// Ingestar un nuevo item en la base de datos vectorial
+app.post("/items", async (c) => {
+  const { id, title, description, tags } = await c.req.json();
+
+  // Combinar campos relevantes para embedding
+  const textToEmbed = `${title}. ${description}. Tags: ${tags.join(", ")}`;
+
+  // Generar embedding
+  const embedding = await c.env.AI.run("@cf/baai/bge-base-en-v1.5", {
+    text: textToEmbed,
+  });
+
+  // Guardar en D1
+  await c.env.DB.prepare(
+    "INSERT INTO items (id, title, description, tags, created_at) VALUES (?, ?, ?, ?, ?)"
+  ).bind(id, title, description, JSON.stringify(tags), Date.now()).run();
+
+  // Upsert a Vectorize con metadata para filtrado
+  await c.env.TASK_INDEX.upsert([{
+    id: id,
+    values: embedding.data[0],
+    metadata: {
+      tags: tags.join(","),
+      created_at: Date.now(),
+    },
+  }]);
+
+  return c.json({ success: true, id });
+});
+
+// Búsqueda semántica
+app.get("/search", async (c) => {
+  const query = c.req.query("q") || "";
+  const limit = parseInt(c.req.query("limit") || "10");
+
+  // Generar embedding de la consulta
+  const queryEmbedding = await c.env.AI.run("@cf/baai/bge-base-en-v1.5", {
+    text: query,
+  });
+
+  // Buscar en Vectorize
+  const results = await c.env.TASK_INDEX.query(queryEmbedding.data[0], {
+    topK: limit,
+    returnMetadata: "all",
+  });
+
+  if (results.matches.length === 0) {
+    return c.json({ items: [], query });
+  }
+
+  // Obtener detalles completos de D1
+  const ids = results.matches.map(m => m.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const { results: items } = await c.env.DB.prepare(
+    `SELECT * FROM items WHERE id IN (${placeholders})`
+  ).bind(...ids).all();
+
+  // Ordenar por score de similitud
+  const rankedItems = results.matches.map(match => ({
+    ...items.find(item => item.id === match.id),
+    similarity: match.score,
+  }));
+
+  return c.json({ items: rankedItems, query });
+});
+
+export default app;
+```
+
+Crear tu índice Vectorize:
+
+```bash
+npx wrangler vectorize create tasks-vector-index --dimensions=768 --metric=cosine
+```
+
+---
+
+### Moderación de Contenido con Llama Guard
+
+Llama Guard 3 8B clasifica contenido en **14 categorías de peligro** (violencia, discurso de odio, contenido sexual, etc.):
+
+```typescript
+interface ModerationResult {
+  safe: boolean;
+  categories?: string[];
+}
+
+async function moderateContent(
+  env: Env,
+  userContent: string,
+  aiResponse?: string
+): Promise<ModerationResult> {
+  const messages = [
+    { role: "user" as const, content: userContent },
+    ...(aiResponse ? [{ role: "assistant" as const, content: aiResponse }] : []),
+  ];
+
+  const response = await env.AI.run("@cf/meta/llama-guard-3-8b", { messages });
+
+  const responseText = response.response as string;
+  const isSafe = responseText.toLowerCase().includes("safe");
+
+  // Extraer categorías si está marcado (formato: "unsafe\nS1, S7")
+  let categories: string[] = [];
+  if (!isSafe && responseText.includes("\n")) {
+    categories = responseText.split("\n")[1]?.split(",").map(s => s.trim()) || [];
+  }
+
+  return { safe: isSafe, categories };
+}
+
+// Middleware de moderación
+app.post("/content/submit", async (c) => {
+  const { content } = await c.req.json();
+
+  const moderation = await moderateContent(c.env, content);
+
+  if (!moderation.safe) {
+    return c.json({
+      error: "Contenido marcado para revisión",
+      categories: moderation.categories,
+    }, 400);
+  }
+
+  // Proceder con el procesamiento del contenido...
+});
+```
+
+**Categorías de peligro:** S1: Crímenes Violentos, S2: Crímenes No Violentos, S3: Crímenes Sexuales, S4: Explotación Infantil, S5: Difamación, S6: Consejo Especializado, S7: Privacidad, S8: Propiedad Intelectual, S9: Armas, S10: Discurso de Odio, S11: Autolesión, S12: Contenido Sexual, S13: Elecciones, S14: Abuso de Código
+
+---
+
+### Respuestas en Streaming
+
+Para funciones como autocompletado o indicadores de escritura:
+
+```typescript
+app.post("/suggestions/stream", async (c) => {
+  const { prompt } = await c.req.json();
+
+  const stream = await c.env.AI.run("@cf/meta/llama-3.2-3b-instruct", {
+    messages: [
+      { role: "system", content: "Eres un asistente útil. Sé conciso." },
+      { role: "user", content: prompt },
+    ],
+    stream: true,
+    max_tokens: 256,
+  });
+
+  return new Response(stream as ReadableStream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
+});
+```
+
+---
+
+### Function Calling para Agentes Inteligentes
+
+Workers AI soporta function calling embebido vía `@cloudflare/ai-utils`:
+
+```typescript
+import { runWithTools } from "@cloudflare/ai-utils";
+
+app.post("/agent", async (c) => {
+  const { userMessage, userId } = await c.req.json();
+
+  const response = await runWithTools(
+    c.env.AI,
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        { role: "system", content: "Eres un asistente útil. Usa herramientas cuando sea necesario." },
+        { role: "user", content: userMessage },
+      ],
+      tools: [
+        {
+          name: "searchItems",
+          description: "Buscar items que coincidan con una consulta",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "Consulta de búsqueda" },
+            },
+            required: ["query"],
+          },
+          function: async ({ query }) => {
+            const embedding = await c.env.AI.run("@cf/baai/bge-base-en-v1.5", { text: query });
+            const results = await c.env.TASK_INDEX.query(embedding.data[0], { topK: 5 });
+            return JSON.stringify(results.matches);
+          },
+        },
+        {
+          name: "getUserProfile",
+          description: "Obtener el perfil del usuario actual",
+          parameters: { type: "object", properties: {} },
+          function: async () => {
+            const user = await c.env.DB.prepare(
+              "SELECT * FROM users WHERE id = ?"
+            ).bind(userId).first();
+            return JSON.stringify(user);
+          },
+        },
+      ],
+    }
+  );
+
+  return c.json(response);
+});
+```
+
+---
+
+### Outputs JSON Estructurados
+
+Cuando necesitas cumplimiento garantizado del esquema JSON:
+
+```typescript
+app.post("/analyze", async (c) => {
+  const { text } = await c.req.json();
+
+  const response = await c.env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+    messages: [
+      { role: "system", content: "Analiza el texto y categorízalo." },
+      { role: "user", content: text },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        type: "object",
+        properties: {
+          category: {
+            type: "string",
+            enum: ["tech", "business", "lifestyle", "other"],
+          },
+          sentiment: {
+            type: "string",
+            enum: ["positive", "neutral", "negative"],
+          },
+          keywords: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+        required: ["category", "sentiment", "keywords"],
+      },
+    },
+  });
+
+  // La respuesta está garantizada de coincidir con el esquema
+  const parsed = JSON.parse(response.response as string);
+  return c.json(parsed);
+});
+```
+
+> **Nota**: El modo JSON no soporta streaming. El parámetro `stream: true` es ignorado cuando se usa `response_format`.
+
+---
+
+### Estrategias de Optimización de Costos
+
+#### 1. Caching Agresivo con AI Gateway
+
+```typescript
+const response = await env.AI.run(
+  "@cf/meta/llama-3.2-3b-instruct",
+  { messages: [...] },
+  {
+    gateway: {
+      id: "mi-gateway",
+      skipCache: false,
+      cacheTtl: 3600,
+    },
+  }
+);
+```
+
+El caching de AI Gateway puede reducir **90% de costos de inferencia redundante**.
+
+#### 2. Caching Semántico con KV
+
+```typescript
+async function getCachedOrGenerate(
+  env: Env,
+  prompt: string,
+  model: string
+): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(prompt);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const cacheKey = `ai:${model}:${hashArray.map(b => b.toString(16).padStart(2, "0")).join("")}`;
+
+  const cached = await env.CACHE.get(cacheKey);
+  if (cached) return cached;
+
+  const result = await env.AI.run(model as any, {
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  await env.CACHE.put(cacheKey, result.response as string, {
+    expirationTtl: 86400,
+  });
+
+  return result.response as string;
+}
+```
+
+#### 3. Enrutamiento de Modelos por Complejidad
+
+```typescript
+function selectModel(taskType: string, inputLength: number): string {
+  if (taskType === "classification" || inputLength < 100) {
+    return "@cf/meta/llama-3.2-1b-instruct"; // Más barato
+  }
+  if (taskType === "suggestions") {
+    return "@cf/meta/llama-3.2-3b-instruct"; // Buen balance
+  }
+  if (taskType === "complex_reasoning") {
+    return "@cf/meta/llama-3.3-70b-instruct-fp8-fast"; // Mejor calidad
+  }
+  return "@cf/meta/llama-3.1-8b-instruct-awq"; // Default
+}
+```
+
+---
+
+### Procesamiento Asíncrono con Queues
+
+Para operaciones que no deberían bloquear tu API:
+
+```typescript
+// Productor: Encolar jobs cuando se crean items
+app.post("/items", async (c) => {
+  const item = await c.req.json();
+
+  // Guardar en D1 inmediatamente
+  await c.env.DB.prepare(
+    "INSERT INTO items (id, title, description, status) VALUES (?, ?, ?, ?)"
+  ).bind(item.id, item.title, item.description, "pending_embedding").run();
+
+  // Encolar embedding en segundo plano
+  await c.env.EMBEDDING_QUEUE.send({
+    itemId: item.id,
+    text: `${item.title}. ${item.description}`,
+  });
+
+  return c.json({ itemId: item.id, status: "processing" });
+});
+
+// Consumidor: Procesar cola de embeddings
+export default {
+  async queue(batch: MessageBatch<{ itemId: string; text: string }>, env: Env) {
+    for (const message of batch.messages) {
+      try {
+        const { itemId, text } = message.body;
+
+        const embedding = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
+          text: text,
+        });
+
+        await env.TASK_INDEX.upsert([{
+          id: itemId,
+          values: embedding.data[0],
+        }]);
+
+        await env.DB.prepare(
+          "UPDATE items SET status = ? WHERE id = ?"
+        ).bind("active", itemId).run();
+
+        message.ack();
+      } catch (error) {
+        console.error(`Falló: ${message.body.itemId}`, error);
+        message.retry();
+      }
+    }
+  },
+
+  async fetch(request: Request, env: Env) {
+    return app.fetch(request, env);
+  },
+};
+```
+
+---
+
+### Chatbot con Historial de Conversación
+
+```typescript
+interface Message {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+app.post("/chat", async (c) => {
+  const { sessionId, message } = await c.req.json();
+  const historyKey = `chat:${sessionId}`;
+
+  const stored = await c.env.CACHE.get(historyKey, "json") as Message[] | null;
+  const messages: Message[] = stored || [
+    { role: "system", content: "Eres un asistente útil. Sé conciso." },
+  ];
+
+  messages.push({ role: "user", content: message });
+
+  // Ventana deslizante para prevenir desbordamiento de contexto
+  const contextMessages = [
+    messages[0],
+    ...messages.slice(-20),
+  ];
+
+  const response = await c.env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+    messages: contextMessages,
+    max_tokens: 512,
+  });
+
+  messages.push({ role: "assistant", content: response.response as string });
+
+  await c.env.CACHE.put(historyKey, JSON.stringify(messages), {
+    expirationTtl: 3600,
+  });
+
+  return c.json({ response: response.response });
+});
+```
+
+---
+
+### Problemas Comunes
+
+#### 1. Límites de Memoria (128MB en Workers)
+
+```typescript
+// ❌ Problema: Cargar archivos grandes en memoria
+const largeFile = await response.arrayBuffer(); // Puede causar OOM
+
+// ✅ Solución: Procesamiento en streaming
+const { readable, writable } = new TransformStream();
+response.body.pipeTo(writable);
+return new Response(readable);
+```
+
+#### 2. Límites de Tiempo CPU (50ms pago, 10ms gratis)
+
+```typescript
+// ❌ Evitar: Crypto en JS puro (lento)
+import CryptoJS from "crypto-js";
+const hash = CryptoJS.SHA256(data);
+
+// ✅ Usar: WebCrypto API (nativo, instantáneo)
+const hash = await crypto.subtle.digest("SHA-256", data);
+```
+
+#### 3. Costos en Desarrollo
+
+```
+⚠️ CRÍTICO: Ejecutar `wrangler dev` con bindings de Workers AI
+   aún conecta a la infraestructura GPU remota de Cloudflare.
+   SERÁS COBRADO por uso de AI durante desarrollo local.
+```
+
+#### 4. Manejo de Errores con Retry
+
+```typescript
+async function runWithRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3
+): Promise<T> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+
+      if (error.message?.includes("400") || error.message?.includes("401")) {
+        throw error; // No reintentar errores de cliente
+      }
+
+      if (error.message?.includes("Capacity") || error.message?.includes("timeout")) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw lastError;
+}
+```
+
+---
+
+### Comandos CLI Esenciales
+
+```bash
+# Desarrollo
+wrangler dev                          # Iniciar servidor de desarrollo
+wrangler dev --remote                 # Usar recursos remotos
+
+# Despliegue
+wrangler deploy                       # Desplegar a producción
+wrangler deploy --env staging         # Desplegar a staging
+
+# Base de datos
+wrangler d1 create miapp              # Crear base de datos D1
+wrangler d1 execute miapp --local --file=schema.sql
+wrangler d1 execute miapp --remote --file=schema.sql
+
+# Índice Vectorial
+wrangler vectorize create mi-index --dimensions=768 --metric=cosine
+
+# KV
+wrangler kv namespace create CACHE
+
+# Secretos
+wrangler secret put API_KEY
+
+# Logs
+wrangler tail                         # Transmitir logs de producción
+wrangler tail --search "error"        # Filtrar logs
+```
+
+---
+
+### Conclusión
+
+Cloudflare Workers AI proporciona una plataforma poderosa para agregar IA a tus aplicaciones con mínima sobrecarga operacional. Los patrones clave son:
+
+- **Búsqueda semántica** usando embeddings BGE + Vectorize
+- **Moderación de contenido** con Llama Guard
+- **Sugerencias inteligentes** usando modelos pequeños (1B-3B) para velocidad y costo
+- **Procesamiento asíncrono** vía Queues para generación de embeddings
+- **Caching agresivo** a través de AI Gateway y KV
+
+El tier gratuito de 10,000 Neurons diarios es suficiente para prototipos, con uso pago escalando predeciblemente a $0.011 por 1,000 Neurons.
+
+---
+
+### Recursos Relacionados
+
+- [Documentación de Cloudflare Workers AI](https://developers.cloudflare.com/workers-ai/)
+- [Catálogo de Modelos Workers AI](https://developers.cloudflare.com/workers-ai/models/)
+- [Documentación de Vectorize](https://developers.cloudflare.com/vectorize/)
+- [Documentación de D1](https://developers.cloudflare.com/d1/)
+- [Cloudflare Queues](https://developers.cloudflare.com/queues/)

@@ -1,0 +1,680 @@
+---
+title: 'Cloudflare Workers AI: Production-Ready Guide for Real Applications'
+summary: 'Advanced guide to Cloudflare Workers AI covering RAG pipelines, content moderation with Llama Guard, function calling, structured outputs, cost optimization, and async processing with Queues.'
+image: '/images/posts/cloudflare-workers-ai-production-guide.webp'
+author: 'Fredy Acuna'
+publishedAt: '2025-12-08'
+---
+
+### Cloudflare Workers AI: Production-Ready Guide
+
+**Cloudflare Workers AI delivers serverless GPU inference at the edge**, enabling you to add AI capabilities—embeddings, content moderation, smart suggestions—without managing infrastructure. This guide goes beyond basic docs to cover real architectural patterns, cost optimization, and production gotchas.
+
+---
+
+### What You'll Learn
+
+- Setting up Workers AI with modern wrangler.jsonc configuration
+- Building a RAG pipeline with Vectorize for semantic search
+- Content moderation with Llama Guard
+- Function calling for intelligent agents
+- Structured JSON outputs for API responses
+- Cost optimization strategies that actually work
+- Async processing with Queues
+- Chatbot with conversation history
+- Common gotchas and debugging tips
+
+---
+
+### Prerequisites
+
+- A [Cloudflare account](https://dash.cloudflare.com/sign-up)
+- Node.js 18+ and pnpm/npm
+- Basic TypeScript knowledge
+- Familiarity with REST APIs
+
+---
+
+### Setting Up Your Workers AI Project
+
+Modern Workers projects use **wrangler.jsonc** (JSON with comments)—Cloudflare now recommends this over TOML for new projects:
+
+```jsonc
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "my-ai-app",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-12-01",
+
+  "ai": { "binding": "AI" },
+
+  "vectorize": [{
+    "binding": "TASK_INDEX",
+    "index_name": "tasks-vector-index"
+  }],
+
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "myapp",
+    "database_id": "<YOUR_DATABASE_ID>",
+    "migrations_dir": "migrations"
+  }],
+
+  "kv_namespaces": [{
+    "binding": "CACHE",
+    "id": "<YOUR_KV_ID>",
+    "preview_id": "<YOUR_PREVIEW_KV_ID>"
+  }],
+
+  "queues": {
+    "producers": [{ "binding": "EMBEDDING_QUEUE", "queue": "embedding-jobs" }],
+    "consumers": [{ "queue": "embedding-jobs", "max_batch_size": 10, "max_batch_timeout": 5 }]
+  },
+
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 }
+}
+```
+
+TypeScript interface for your environment bindings:
+
+```typescript
+export interface Env {
+  AI: Ai;
+  TASK_INDEX: Vectorize;
+  DB: D1Database;
+  CACHE: KVNamespace;
+  EMBEDDING_QUEUE: Queue;
+  API_KEY: string;
+}
+```
+
+> **Important**: Never put secrets in your config file. Use `npx wrangler secret put API_KEY` and store local development secrets in `.dev.vars` (add to `.gitignore`).
+
+---
+
+### Choosing the Right Model
+
+Workers AI offers **50+ models**. Here's a strategic breakdown:
+
+| Use Case | Recommended Model | Why |
+|----------|------------------|-----|
+| Embeddings | `@cf/baai/bge-base-en-v1.5` | 768 dimensions, excellent accuracy/cost |
+| Content moderation | `@cf/meta/llama-guard-3-8b` | Purpose-built safety classifier |
+| Fast suggestions | `@cf/meta/llama-3.2-3b-instruct` | Fast, cheap, good enough |
+| Complex reasoning | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Best quality, 2-4x speed from FP8 |
+| General tasks | `@cf/meta/llama-3.1-8b-instruct-awq` | INT4 quantized—75% memory reduction |
+
+**Cost per million tokens:**
+
+| Model | Input | Output | Speed |
+|-------|-------|--------|-------|
+| llama-3.2-1b-instruct | $0.027 | $0.201 | Fastest |
+| llama-3.2-3b-instruct | $0.051 | $0.335 | Fast |
+| llama-3.1-8b-instruct-fp8-fast | $0.045 | $0.384 | Medium |
+| llama-3.3-70b-instruct-fp8-fast | $0.293 | $2.253 | Slower |
+
+The free tier gives you **10,000 Neurons/day**—approximately 1,300 small-model LLM responses or 10,000+ embeddings.
+
+---
+
+### Building a RAG Pipeline for Semantic Search
+
+This pattern enables semantic search—users can find items even when using different words:
+
+```typescript
+import { Hono } from "hono";
+
+const app = new Hono<{ Bindings: Env }>();
+
+// Ingest a new item into the vector database
+app.post("/items", async (c) => {
+  const { id, title, description, tags } = await c.req.json();
+
+  // Combine relevant fields for embedding
+  const textToEmbed = `${title}. ${description}. Tags: ${tags.join(", ")}`;
+
+  // Generate embedding
+  const embedding = await c.env.AI.run("@cf/baai/bge-base-en-v1.5", {
+    text: textToEmbed,
+  });
+
+  // Store in D1
+  await c.env.DB.prepare(
+    "INSERT INTO items (id, title, description, tags, created_at) VALUES (?, ?, ?, ?, ?)"
+  ).bind(id, title, description, JSON.stringify(tags), Date.now()).run();
+
+  // Upsert to Vectorize with metadata for filtering
+  await c.env.TASK_INDEX.upsert([{
+    id: id,
+    values: embedding.data[0],
+    metadata: {
+      tags: tags.join(","),
+      created_at: Date.now(),
+    },
+  }]);
+
+  return c.json({ success: true, id });
+});
+
+// Semantic search
+app.get("/search", async (c) => {
+  const query = c.req.query("q") || "";
+  const limit = parseInt(c.req.query("limit") || "10");
+
+  // Generate query embedding
+  const queryEmbedding = await c.env.AI.run("@cf/baai/bge-base-en-v1.5", {
+    text: query,
+  });
+
+  // Search Vectorize
+  const results = await c.env.TASK_INDEX.query(queryEmbedding.data[0], {
+    topK: limit,
+    returnMetadata: "all",
+  });
+
+  if (results.matches.length === 0) {
+    return c.json({ items: [], query });
+  }
+
+  // Fetch full details from D1
+  const ids = results.matches.map(m => m.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const { results: items } = await c.env.DB.prepare(
+    `SELECT * FROM items WHERE id IN (${placeholders})`
+  ).bind(...ids).all();
+
+  // Sort by similarity score
+  const rankedItems = results.matches.map(match => ({
+    ...items.find(item => item.id === match.id),
+    similarity: match.score,
+  }));
+
+  return c.json({ items: rankedItems, query });
+});
+
+export default app;
+```
+
+Create your Vectorize index:
+
+```bash
+npx wrangler vectorize create tasks-vector-index --dimensions=768 --metric=cosine
+```
+
+---
+
+### Content Moderation with Llama Guard
+
+Llama Guard 3 8B classifies content across **14 hazard categories** (violence, hate speech, sexual content, etc.):
+
+```typescript
+interface ModerationResult {
+  safe: boolean;
+  categories?: string[];
+}
+
+async function moderateContent(
+  env: Env,
+  userContent: string,
+  aiResponse?: string
+): Promise<ModerationResult> {
+  const messages = [
+    { role: "user" as const, content: userContent },
+    ...(aiResponse ? [{ role: "assistant" as const, content: aiResponse }] : []),
+  ];
+
+  const response = await env.AI.run("@cf/meta/llama-guard-3-8b", { messages });
+
+  const responseText = response.response as string;
+  const isSafe = responseText.toLowerCase().includes("safe");
+
+  // Extract categories if flagged (format: "unsafe\nS1, S7")
+  let categories: string[] = [];
+  if (!isSafe && responseText.includes("\n")) {
+    categories = responseText.split("\n")[1]?.split(",").map(s => s.trim()) || [];
+  }
+
+  return { safe: isSafe, categories };
+}
+
+// Moderation middleware
+app.post("/content/submit", async (c) => {
+  const { content } = await c.req.json();
+
+  const moderation = await moderateContent(c.env, content);
+
+  if (!moderation.safe) {
+    return c.json({
+      error: "Content flagged for review",
+      categories: moderation.categories,
+    }, 400);
+  }
+
+  // Proceed with content processing...
+});
+```
+
+**Hazard categories:** S1: Violent Crimes, S2: Non-Violent Crimes, S3: Sex-Related Crimes, S4: Child Exploitation, S5: Defamation, S6: Specialized Advice, S7: Privacy, S8: Intellectual Property, S9: Weapons, S10: Hate Speech, S11: Self-Harm, S12: Sexual Content, S13: Elections, S14: Code Abuse
+
+---
+
+### Streaming Responses
+
+For features like autocomplete or typing indicators:
+
+```typescript
+app.post("/suggestions/stream", async (c) => {
+  const { prompt } = await c.req.json();
+
+  const stream = await c.env.AI.run("@cf/meta/llama-3.2-3b-instruct", {
+    messages: [
+      { role: "system", content: "You're a helpful assistant. Be concise." },
+      { role: "user", content: prompt },
+    ],
+    stream: true,
+    max_tokens: 256,
+  });
+
+  return new Response(stream as ReadableStream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
+});
+```
+
+---
+
+### Function Calling for Intelligent Agents
+
+Workers AI supports embedded function calling via `@cloudflare/ai-utils`:
+
+```typescript
+import { runWithTools } from "@cloudflare/ai-utils";
+
+app.post("/agent", async (c) => {
+  const { userMessage, userId } = await c.req.json();
+
+  const response = await runWithTools(
+    c.env.AI,
+    "@hf/nousresearch/hermes-2-pro-mistral-7b",
+    {
+      messages: [
+        { role: "system", content: "You're a helpful assistant. Use tools when needed." },
+        { role: "user", content: userMessage },
+      ],
+      tools: [
+        {
+          name: "searchItems",
+          description: "Search for items matching a query",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "Search query" },
+            },
+            required: ["query"],
+          },
+          function: async ({ query }) => {
+            const embedding = await c.env.AI.run("@cf/baai/bge-base-en-v1.5", { text: query });
+            const results = await c.env.TASK_INDEX.query(embedding.data[0], { topK: 5 });
+            return JSON.stringify(results.matches);
+          },
+        },
+        {
+          name: "getUserProfile",
+          description: "Get the current user's profile",
+          parameters: { type: "object", properties: {} },
+          function: async () => {
+            const user = await c.env.DB.prepare(
+              "SELECT * FROM users WHERE id = ?"
+            ).bind(userId).first();
+            return JSON.stringify(user);
+          },
+        },
+      ],
+    }
+  );
+
+  return c.json(response);
+});
+```
+
+---
+
+### Structured JSON Outputs
+
+When you need guaranteed JSON schema compliance:
+
+```typescript
+app.post("/analyze", async (c) => {
+  const { text } = await c.req.json();
+
+  const response = await c.env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+    messages: [
+      { role: "system", content: "Analyze the text and categorize it." },
+      { role: "user", content: text },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        type: "object",
+        properties: {
+          category: {
+            type: "string",
+            enum: ["tech", "business", "lifestyle", "other"],
+          },
+          sentiment: {
+            type: "string",
+            enum: ["positive", "neutral", "negative"],
+          },
+          keywords: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+        required: ["category", "sentiment", "keywords"],
+      },
+    },
+  });
+
+  // Response is guaranteed to match schema
+  const parsed = JSON.parse(response.response as string);
+  return c.json(parsed);
+});
+```
+
+> **Note**: JSON mode does not support streaming. The `stream: true` parameter is ignored when using `response_format`.
+
+---
+
+### Cost Optimization Strategies
+
+#### 1. Aggressive Caching with AI Gateway
+
+```typescript
+const response = await env.AI.run(
+  "@cf/meta/llama-3.2-3b-instruct",
+  { messages: [...] },
+  {
+    gateway: {
+      id: "my-gateway",
+      skipCache: false,
+      cacheTtl: 3600,
+    },
+  }
+);
+```
+
+AI Gateway caching can reduce **90% of redundant inference costs**.
+
+#### 2. Semantic Caching with KV
+
+```typescript
+async function getCachedOrGenerate(
+  env: Env,
+  prompt: string,
+  model: string
+): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(prompt);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const cacheKey = `ai:${model}:${hashArray.map(b => b.toString(16).padStart(2, "0")).join("")}`;
+
+  const cached = await env.CACHE.get(cacheKey);
+  if (cached) return cached;
+
+  const result = await env.AI.run(model as any, {
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  await env.CACHE.put(cacheKey, result.response as string, {
+    expirationTtl: 86400,
+  });
+
+  return result.response as string;
+}
+```
+
+#### 3. Model Routing by Complexity
+
+```typescript
+function selectModel(taskType: string, inputLength: number): string {
+  if (taskType === "classification" || inputLength < 100) {
+    return "@cf/meta/llama-3.2-1b-instruct"; // Cheapest
+  }
+  if (taskType === "suggestions") {
+    return "@cf/meta/llama-3.2-3b-instruct"; // Good balance
+  }
+  if (taskType === "complex_reasoning") {
+    return "@cf/meta/llama-3.3-70b-instruct-fp8-fast"; // Best quality
+  }
+  return "@cf/meta/llama-3.1-8b-instruct-awq"; // Default
+}
+```
+
+---
+
+### Async Processing with Queues
+
+For operations that shouldn't block your API:
+
+```typescript
+// Producer: Queue jobs when items are created
+app.post("/items", async (c) => {
+  const item = await c.req.json();
+
+  // Save to D1 immediately
+  await c.env.DB.prepare(
+    "INSERT INTO items (id, title, description, status) VALUES (?, ?, ?, ?)"
+  ).bind(item.id, item.title, item.description, "pending_embedding").run();
+
+  // Queue background embedding
+  await c.env.EMBEDDING_QUEUE.send({
+    itemId: item.id,
+    text: `${item.title}. ${item.description}`,
+  });
+
+  return c.json({ itemId: item.id, status: "processing" });
+});
+
+// Consumer: Process embedding queue
+export default {
+  async queue(batch: MessageBatch<{ itemId: string; text: string }>, env: Env) {
+    for (const message of batch.messages) {
+      try {
+        const { itemId, text } = message.body;
+
+        const embedding = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
+          text: text,
+        });
+
+        await env.TASK_INDEX.upsert([{
+          id: itemId,
+          values: embedding.data[0],
+        }]);
+
+        await env.DB.prepare(
+          "UPDATE items SET status = ? WHERE id = ?"
+        ).bind("active", itemId).run();
+
+        message.ack();
+      } catch (error) {
+        console.error(`Failed: ${message.body.itemId}`, error);
+        message.retry();
+      }
+    }
+  },
+
+  async fetch(request: Request, env: Env) {
+    return app.fetch(request, env);
+  },
+};
+```
+
+---
+
+### Chatbot with Conversation History
+
+```typescript
+interface Message {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+app.post("/chat", async (c) => {
+  const { sessionId, message } = await c.req.json();
+  const historyKey = `chat:${sessionId}`;
+
+  const stored = await c.env.CACHE.get(historyKey, "json") as Message[] | null;
+  const messages: Message[] = stored || [
+    { role: "system", content: "You're a helpful assistant. Be concise." },
+  ];
+
+  messages.push({ role: "user", content: message });
+
+  // Sliding window to prevent context overflow
+  const contextMessages = [
+    messages[0],
+    ...messages.slice(-20),
+  ];
+
+  const response = await c.env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+    messages: contextMessages,
+    max_tokens: 512,
+  });
+
+  messages.push({ role: "assistant", content: response.response as string });
+
+  await c.env.CACHE.put(historyKey, JSON.stringify(messages), {
+    expirationTtl: 3600,
+  });
+
+  return c.json({ response: response.response });
+});
+```
+
+---
+
+### Common Gotchas
+
+#### 1. Memory Limits (128MB on Workers)
+
+```typescript
+// ❌ Problem: Loading large files into memory
+const largeFile = await response.arrayBuffer(); // Can OOM
+
+// ✅ Solution: Stream processing
+const { readable, writable } = new TransformStream();
+response.body.pipeTo(writable);
+return new Response(readable);
+```
+
+#### 2. CPU Time Limits (50ms paid, 10ms free)
+
+```typescript
+// ❌ Avoid: Pure-JS crypto (slow)
+import CryptoJS from "crypto-js";
+const hash = CryptoJS.SHA256(data);
+
+// ✅ Use: WebCrypto API (native, instant)
+const hash = await crypto.subtle.digest("SHA-256", data);
+```
+
+#### 3. Development Costs
+
+```
+⚠️ CRITICAL: Running `wrangler dev` with Workers AI bindings
+   still connects to Cloudflare's remote GPU infrastructure.
+   You WILL be charged for AI usage during local development.
+```
+
+#### 4. Error Handling with Retry
+
+```typescript
+async function runWithRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3
+): Promise<T> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+
+      if (error.message?.includes("400") || error.message?.includes("401")) {
+        throw error; // Don't retry client errors
+      }
+
+      if (error.message?.includes("Capacity") || error.message?.includes("timeout")) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw lastError;
+}
+```
+
+---
+
+### Essential CLI Commands
+
+```bash
+# Development
+wrangler dev                          # Start local dev server
+wrangler dev --remote                 # Use remote resources
+
+# Deployment
+wrangler deploy                       # Deploy to production
+wrangler deploy --env staging         # Deploy to staging
+
+# Database
+wrangler d1 create myapp              # Create D1 database
+wrangler d1 execute myapp --local --file=schema.sql
+wrangler d1 execute myapp --remote --file=schema.sql
+
+# Vector Index
+wrangler vectorize create my-index --dimensions=768 --metric=cosine
+
+# KV
+wrangler kv namespace create CACHE
+
+# Secrets
+wrangler secret put API_KEY
+
+# Logs
+wrangler tail                         # Stream production logs
+wrangler tail --search "error"        # Filter logs
+```
+
+---
+
+### Conclusion
+
+Cloudflare Workers AI provides a powerful platform for adding AI to your applications with minimal operational overhead. The key patterns are:
+
+- **Semantic search** using BGE embeddings + Vectorize
+- **Content moderation** with Llama Guard
+- **Smart suggestions** using small models (1B-3B) for speed and cost
+- **Async processing** via Queues for embedding generation
+- **Aggressive caching** through AI Gateway and KV
+
+The free tier's 10,000 daily Neurons is sufficient for prototyping, with paid usage scaling predictably at $0.011 per 1,000 Neurons.
+
+---
+
+### Related Resources
+
+- [Cloudflare Workers AI Documentation](https://developers.cloudflare.com/workers-ai/)
+- [Workers AI Models Catalog](https://developers.cloudflare.com/workers-ai/models/)
+- [Vectorize Documentation](https://developers.cloudflare.com/vectorize/)
+- [D1 Database Documentation](https://developers.cloudflare.com/d1/)
+- [Cloudflare Queues](https://developers.cloudflare.com/queues/)
